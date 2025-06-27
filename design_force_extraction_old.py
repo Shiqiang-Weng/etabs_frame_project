@@ -52,12 +52,11 @@ def extract_design_forces_and_summary(column_names, beam_names):
         # 添加调试信息
         print("🔍 开始API调试分析...")
         test_simple_api_call(sap_model, "Design Forces - Columns")
-        # 测试新的目标梁表格
-        test_simple_api_call(sap_model, "Concrete Beam Flexure Envelope - Chinese 2010")
+        test_simple_api_call(sap_model, "Design Forces - Beams")
 
         # 提取框架柱设计内力
         print("📊 正在提取框架柱设计内力...")
-        # 保持原有的成功逻辑，因为 Design Forces - Columns 是可用的
+        # 先尝试简化方法
         column_design_success = extract_design_forces_simple(
             sap_model, "Design Forces - Columns", column_names, "column_design_forces.csv"
         )
@@ -67,29 +66,17 @@ def extract_design_forces_and_summary(column_names, beam_names):
             print("🔄 简化方法失败，尝试原方法...")
             column_design_success = extract_column_design_forces(sap_model, column_names)
 
-        # 提取框架梁设计内力 - **修改部分**
-        print("📊 正在提取框架梁设计包络...")
-        # 修改目标表格为截图所示的表格
-        beam_table_to_extract = "Concrete Beam Flexure Envelope - Chinese 2010"
-        beam_output_filename = "beam_flexure_envelope.csv"
-
-        print(f"🎯 目标表格: {beam_table_to_extract}")
-
-        # 尝试简化方法 (CSV导出)
+        # 提取框架梁设计内力
+        print("📊 正在提取框架梁设计内力...")
+        # 先尝试简化方法
         beam_design_success = extract_design_forces_simple(
-            sap_model, beam_table_to_extract, beam_names, beam_output_filename
+            sap_model, "Design Forces - Beams", beam_names, "beam_design_forces.csv"
         )
 
-        # 如果简化方法失败，尝试原方法 (GetTableForDisplayArray)
+        # 如果简化方法失败，尝试原方法
         if not beam_design_success:
-            print("🔄 简化方法失败，尝试提取旧版内力表...")
-            # 作为后备，尝试提取原始的内力表
-            beam_design_success = extract_design_forces_simple(
-                sap_model, "Design Forces - Beams", beam_names, "beam_design_forces.csv"
-            )
-            if not beam_design_success:
-                print("🔄 再次失败，尝试使用原方法...")
-                beam_design_success = extract_beam_design_forces(sap_model, beam_names)
+            print("🔄 简化方法失败，尝试原方法...")
+            beam_design_success = extract_beam_design_forces(sap_model, beam_names)
 
         # 检查CSV提取是否成功
         csv_extraction_success = column_design_success and beam_design_success
@@ -142,15 +129,12 @@ def check_design_completion(sap_model):
         # 使用数据库表方式获取可用表格
         db = sap_model.DatabaseTables
 
-        # **修改部分**: 更新要检查的设计表格列表
-        # 添加截图中的表格，并保留旧表格以实现向后兼容
+        # 要检查的设计表格
         design_tables_to_check = [
             "Design Forces - Beams",
             "Design Forces - Columns",
-            "Concrete Beam Flexure Envelope - Chinese 2010",  # <-- 新增: 来自截图的表格
-            "Concrete Column Envelope - Chinese 2010",  # <-- 新增: 基于梁表格的合理推测
-            "Concrete Column Design - P-M-M Design Forces",  # <-- 保留: 旧版表格
-            "Concrete Beam Design - Flexural & Shear Forces"  # <-- 保留: 旧版表格
+            "Concrete Column Design - P-M-M Design Forces",
+            "Concrete Beam Design - Flexural & Shear Forces"
         ]
 
         found_tables = []
@@ -198,29 +182,22 @@ def check_design_completion(sap_model):
                             except:
                                 pass
                     else:
-                        # 只对列表中特定的目标表格显示警告，避免过多信息
-                        if table_key in ["Concrete Column Design - P-M-M Design Forces",
-                                         "Concrete Beam Design - Flexural & Shear Forces",
-                                         "Concrete Beam Flexure Envelope - Chinese 2010"]:
-                            print(f"ℹ️ 表格当前不可用: {table_key} (错误码: {error_code})")
+                        print(f"⚠️ 表格不可用: {table_key} (错误码: {error_code})")
                 elif ret == 0:
                     found_tables.append(table_key)
                     print(f"✅ 找到设计表格: {table_key}")
                 else:
-                    if table_key in ["Concrete Column Design - P-M-M Design Forces",
-                                     "Concrete Beam Design - Flexural & Shear Forces",
-                                     "Concrete Beam Flexure Envelope - Chinese 2010"]:
-                        print(f"ℹ️ 表格当前不可用: {table_key} (返回码: {ret})")
+                    print(f"⚠️ 表格不可用: {table_key} (返回码: {ret})")
 
             except Exception as e:
                 print(f"⚠️ 检查表格 {table_key} 时出错: {str(e)}")
                 continue
 
         if len(found_tables) >= 2:  # 至少要有梁和柱的设计表格
-            print(f"✅ 成功找到 {len(found_tables)} 个设计表格，可以继续提取。")
+            print(f"✅ 成功找到 {len(found_tables)} 个设计表格，设计已完成")
             return True
         elif len(found_tables) > 0:
-            print(f"⚠️ 只找到 {len(found_tables)} 个设计表格，可能设计未完全完成，但仍尝试继续。")
+            print(f"⚠️ 只找到 {len(found_tables)} 个设计表格，可能设计未完全完成")
             return True  # 部分完成也允许继续
         else:
             print("❌ 未找到任何设计表格")
@@ -301,11 +278,8 @@ def extract_design_forces_simple(sap_model, table_key, component_names, output_f
             file_size = os.path.getsize(output_file)
             print(f"📊 CSV文件大小: {file_size} 字节")
 
-            if file_size < 10:  # 文件太小可能为空或只有表头
-                print(f"⚠️ CSV文件大小异常，可能未包含有效数据。")
-                return False
-
-            print(f"✅ CSV导出成功: {output_file}")
+            if file_size > 0:
+                print(f"✅ CSV导出成功: {output_file}")
 
             # 读取并过滤CSV文件
             filtered_file = output_file.replace('.csv', '_filtered.csv')
@@ -384,9 +358,8 @@ def extract_column_design_forces(sap_model, column_names):
 
         output_file = os.path.join(SCRIPT_DIRECTORY, 'column_design_forces.csv')
 
-        # **修改部分**: 添加推测的包络表名并设为优先
+        # 尝试多个可能的表格名称
         possible_table_keys = [
-            "Concrete Column Envelope - Chinese 2010",
             "Design Forces - Columns",
             "Concrete Column Design - P-M-M Design Forces",
             "Column Design Forces"
@@ -449,8 +422,6 @@ def extract_column_design_forces(sap_model, column_names):
 
         # 定义要提取的字段 - 使用更通用的字段名
         possible_field_sets = [
-            # 添加适用于包络表的字段
-            ['Story', 'Label', 'UniqueName', 'Combo', 'P', 'M2', 'M3', 'V2', 'V3', 'As'],
             ['Story', 'Column', 'UniqueName', 'Combo', 'StationLoc', 'P', 'V2', 'V3', 'T', 'M2', 'M3'],
             ['Story', 'Column', 'Unique Name', 'Combo', 'Station Loc', 'P', 'V2', 'V3', 'T', 'M2', 'M3'],
             ['Story', 'Element', 'UniqueName', 'LoadCase', 'Station', 'P', 'V2', 'V3', 'T', 'M2', 'M3'],
@@ -518,45 +489,74 @@ def extract_column_design_forces(sap_model, column_names):
 
             if isinstance(final_result, tuple):
                 print(f"🔍 调试：元组内容类型: {[type(item) for item in final_result]}")
+
+                # 根据调试信息，正确的元组结构是：
+                # [0] error_code (int)
+                # [1] updated_field_list (System.String[])
+                # [2] group_name_out (int) - 似乎是版本号
+                # [3] fields_keys_included (System.String[]) - 实际的字段列表
+                # [4] number_records (int) - 记录数
+                # [5] table_data (System.String[]) - 表格数据
+
                 error_code = final_result[0]
-                fields_keys_included = final_result[3] if len(final_result) > 3 else None
-                number_records = final_result[4] if len(final_result) > 4 else None
-                table_data = final_result[5] if len(final_result) > 5 else None
+                updated_field_list = final_result[1] if len(final_result) > 1 else None
+                version_out = final_result[2] if len(final_result) > 2 else None
+                fields_keys_included = final_result[3] if len(final_result) > 3 else None  # 这是字段列表
+                number_records = final_result[4] if len(final_result) > 4 else None  # 这是记录数
+                table_data = final_result[5] if len(final_result) > 5 else None  # 这是数据
 
                 print(f"🔍 调试：错误码: {error_code}")
+                print(f"🔍 调试：fields_keys_included类型: {type(fields_keys_included)}")
+                print(f"🔍 调试：number_records类型: {type(number_records)}")
+                print(f"🔍 调试：table_data类型: {type(table_data)}")
 
+                # 处理字段列表 - 应该在索引3位置
                 if hasattr(fields_keys_included, '__len__') and hasattr(fields_keys_included, '__getitem__'):
+                    # 如果是数组类型
                     field_keys_list = [str(fields_keys_included[i]) for i in range(len(fields_keys_included))]
                     print(f"🔍 解析出的字段列表: {field_keys_list}")
                 else:
+                    # 使用原始请求的字段列表
                     field_keys_list = field_set
                     print("⚠️ 使用原始字段列表，因为API未返回正确的字段信息")
 
+                # 处理记录数 - 应该在索引4位置
                 if isinstance(number_records, (int, float)):
                     num_records = int(number_records)
                     print(f"🔍 解析出的记录数: {num_records}")
                 else:
+                    print(f"⚠️ 无法解析记录数，类型: {type(number_records)}")
                     num_records = 0
 
+                # 处理表格数据 - 应该在索引5位置
                 if hasattr(table_data, '__len__') and hasattr(table_data, '__getitem__'):
                     table_data_list = [str(table_data[i]) for i in range(len(table_data))]
-                else:
+                    print(f"🔍 解析出的数据长度: {len(table_data_list)}")
+                elif table_data is None:
                     table_data_list = []
+                    print("⚠️ 表格数据为空")
+                else:
+                    print(f"⚠️ 无法解析表格数据类型: {type(table_data)}")
+                    table_data_list = []
+
             else:
                 print("❌ API返回结果不是元组格式")
                 return False
 
             if num_records == 0:
                 print(f"⚠️ 表格 '{table_key}' 中没有数据记录")
+                print("💡 提示: 请确保已完成混凝土柱设计计算")
                 return False
 
             print(f"📋 成功获取 {num_records} 条记录")
+            print(f"📝 可用字段: {field_keys_list}")
 
             # 保存到CSV文件
             with open(output_file, 'w', newline='', encoding='utf-8-sig') as csvfile:
                 writer = csv.writer(csvfile)
                 writer.writerow(field_keys_list)
 
+                # 将一维数组转换为二维数组
                 num_fields = len(field_keys_list)
                 if num_fields > 0:
                     data_rows = [table_data_list[i:i + num_fields] for i in
@@ -564,19 +564,29 @@ def extract_column_design_forces(sap_model, column_names):
                 else:
                     data_rows = []
 
+                # 寻找构件名称字段
                 unique_name_index = None
                 for i, field in enumerate(field_keys_list):
                     field_lower = field.lower()
-                    if 'unique' in field_lower and 'name' in field_lower:
+                    if ('unique' in field_lower and 'name' in field_lower) or \
+                            ('element' in field_lower) or \
+                            ('label' in field_lower):
                         unique_name_index = i
                         break
 
                 if unique_name_index is None:
+                    print("⚠️ 无法确定构件名称字段，保存所有数据")
+                    # 如果找不到名称字段，保存所有数据
                     for row in data_rows:
                         writer.writerow(row)
                     written_count = len(data_rows)
                 else:
+                    # 筛选指定构件的数据
                     written_count = 0
+                    if data_rows:
+                        unique_names_sample = list(set([row[unique_name_index] for row in data_rows[:10]]))
+                        print(f"📋 数据中构件名称示例: {unique_names_sample[:5]}")
+
                     for row in data_rows:
                         if len(row) > unique_name_index and row[unique_name_index] in column_names:
                             writer.writerow(row)
@@ -619,11 +629,10 @@ def extract_beam_design_forces(sap_model, beam_names):
             print("❌ System对象未正确加载，无法提取梁设计内力")
             return False
 
-        output_file = os.path.join(SCRIPT_DIRECTORY, 'beam_flexure_envelope.csv')
+        output_file = os.path.join(SCRIPT_DIRECTORY, 'beam_design_forces.csv')
 
-        # **修改部分**: 添加新表格名称并设为最高优先级
+        # 尝试多个可能的表格名称
         possible_table_keys = [
-            "Concrete Beam Flexure Envelope - Chinese 2010",
             "Design Forces - Beams",
             "Concrete Beam Design - Flexural & Shear Forces",
             "Beam Design Forces"
@@ -656,9 +665,11 @@ def extract_beam_design_forces(sap_model, beam_names):
                     table_data
                 )
 
+                # 检查结果
                 success = False
                 if isinstance(test_result, tuple):
-                    if test_result[0] == 0:
+                    error_code = test_result[0]
+                    if error_code == 0:
                         success = True
                 elif test_result == 0:
                     success = True
@@ -678,10 +689,8 @@ def extract_beam_design_forces(sap_model, beam_names):
 
         print(f"🔍 正在从表格 '{table_key}' 提取详细数据...")
 
-        # **修改部分**: 添加适用于包络表的字段集
+        # 定义要提取的字段
         possible_field_sets = [
-            ['Story', 'Label', 'UniqueName', 'Section', 'Location', '-ve Moment Combo', '-ve Moment', 'As Top',
-             '+ve Moment Combo', '+ve Moment'],
             ['Story', 'Beam', 'UniqueName', 'Combo', 'Station', 'P', 'V2', 'V3', 'T', 'M2', 'M3'],
             ['Story', 'Beam', 'Unique Name', 'Combo', 'Station Loc', 'P', 'V2', 'V3', 'T', 'M2', 'M3'],
             ['Story', 'Element', 'UniqueName', 'LoadCase', 'Location', 'P', 'V2', 'V3', 'T', 'M2', 'M3'],
@@ -706,14 +715,22 @@ def extract_beam_design_forces(sap_model, beam_names):
                 number_records = System.Int32(0)
                 table_data = System.Array.CreateInstance(System.String, 0)
 
+                # 调用API
                 ret = db.GetTableForDisplayArray(
-                    table_key, field_key_list, group_name, table_version,
-                    fields_keys_included, number_records, table_data
+                    table_key,
+                    field_key_list,
+                    group_name,
+                    table_version,
+                    fields_keys_included,
+                    number_records,
+                    table_data
                 )
 
+                # 检查结果
                 success = False
                 if isinstance(ret, tuple):
-                    if ret[0] == 0:
+                    error_code = ret[0]
+                    if error_code == 0:
                         success = True
                         final_result = ret
                 elif ret == 0:
@@ -732,32 +749,70 @@ def extract_beam_design_forces(sap_model, beam_names):
             print("❌ 无法使用任何字段集提取数据")
             return False
 
-        # 解析结果
+        # 解析结果 - 使用正确的元组结构
         try:
+            print(f"🔍 调试：API返回结果类型: {type(final_result)}")
+            print(f"🔍 调试：API返回结果长度: {len(final_result) if hasattr(final_result, '__len__') else 'N/A'}")
+
             if isinstance(final_result, tuple):
-                fields_keys_included = final_result[3] if len(final_result) > 3 else None
-                number_records = final_result[4] if len(final_result) > 4 else None
-                table_data = final_result[5] if len(final_result) > 5 else None
+                print(f"🔍 调试：元组内容类型: {[type(item) for item in final_result]}")
 
+                # 根据调试信息，正确的元组结构是：
+                # [0] error_code (int)
+                # [1] updated_field_list (System.String[])
+                # [2] version_out (int)
+                # [3] fields_keys_included (System.String[]) - 实际的字段列表
+                # [4] number_records (int) - 记录数
+                # [5] table_data (System.String[]) - 表格数据
+
+                error_code = final_result[0]
+                updated_field_list = final_result[1] if len(final_result) > 1 else None
+                version_out = final_result[2] if len(final_result) > 2 else None
+                fields_keys_included = final_result[3] if len(final_result) > 3 else None  # 这是字段列表
+                number_records = final_result[4] if len(final_result) > 4 else None  # 这是记录数
+                table_data = final_result[5] if len(final_result) > 5 else None  # 这是数据
+
+                print(f"🔍 调试：错误码: {error_code}")
+                print(f"🔍 调试：fields_keys_included类型: {type(fields_keys_included)}")
+                print(f"🔍 调试：number_records类型: {type(number_records)}")
+                print(f"🔍 调试：table_data类型: {type(table_data)}")
+
+                # 处理字段列表 - 应该在索引3位置
                 if hasattr(fields_keys_included, '__len__') and hasattr(fields_keys_included, '__getitem__'):
+                    # 如果是数组类型
                     field_keys_list = [str(fields_keys_included[i]) for i in range(len(fields_keys_included))]
+                    print(f"🔍 解析出的字段列表: {field_keys_list}")
                 else:
+                    # 使用原始请求的字段列表
                     field_keys_list = field_set
+                    print("⚠️ 使用原始字段列表，因为API未返回正确的字段信息")
 
+                # 处理记录数 - 应该在索引4位置
                 if isinstance(number_records, (int, float)):
                     num_records = int(number_records)
+                    print(f"🔍 解析出的记录数: {num_records}")
                 else:
+                    print(f"⚠️ 无法解析记录数，类型: {type(number_records)}")
                     num_records = 0
 
+                # 处理表格数据 - 应该在索引5位置
                 if hasattr(table_data, '__len__') and hasattr(table_data, '__getitem__'):
                     table_data_list = [str(table_data[i]) for i in range(len(table_data))]
-                else:
+                    print(f"🔍 解析出的数据长度: {len(table_data_list)}")
+                elif table_data is None:
                     table_data_list = []
+                    print("⚠️ 表格数据为空")
+                else:
+                    print(f"⚠️ 无法解析表格数据类型: {type(table_data)}")
+                    table_data_list = []
+
             else:
+                print("❌ API返回结果不是元组格式")
                 return False
 
             if num_records == 0:
                 print(f"⚠️ 表格 '{table_key}' 中没有数据记录")
+                print("💡 提示: 请确保已完成混凝土梁设计计算")
                 return False
 
             print(f"📋 成功获取 {num_records} 条记录")
@@ -769,19 +824,26 @@ def extract_beam_design_forces(sap_model, beam_names):
 
                 num_fields = len(field_keys_list)
                 if num_fields > 0:
-                    data_rows = [table_data_list[i:i + num_fields] for i in range(0, len(table_data_list), num_fields)]
+                    data_rows = [table_data_list[i:i + num_fields] for i in
+                                 range(0, len(table_data_list), num_fields)]
                 else:
                     data_rows = []
 
+                # 寻找构件名称字段
                 unique_name_index = None
                 for i, field in enumerate(field_keys_list):
-                    if 'unique' in field.lower() and 'name' in field.lower():
+                    field_lower = field.lower()
+                    if ('unique' in field_lower and 'name' in field_lower) or \
+                            ('element' in field_lower) or \
+                            ('label' in field_lower):
                         unique_name_index = i
                         break
 
                 written_count = 0
                 if unique_name_index is None:
-                    for row in data_rows: writer.writerow(row)
+                    print("⚠️ 无法确定构件名称字段，保存所有数据")
+                    for row in data_rows:
+                        writer.writerow(row)
                     written_count = len(data_rows)
                 else:
                     for row in data_rows:
@@ -789,7 +851,7 @@ def extract_beam_design_forces(sap_model, beam_names):
                             writer.writerow(row)
                             written_count += 1
 
-                print(f"✅ 成功保存 {written_count} 条框架梁设计数据")
+                print(f"✅ 成功保存 {written_count} 条框架梁设计内力数据")
                 print(f"📄 文件已保存至: {output_file}")
 
             return written_count > 0
@@ -800,7 +862,7 @@ def extract_beam_design_forces(sap_model, beam_names):
             return False
 
     except Exception as e:
-        print(f"❌ 提取框架梁设计数据失败: {e}")
+        print(f"❌ 提取框架梁设计内力失败: {e}")
         traceback.print_exc()
         return False
 
@@ -819,42 +881,32 @@ def generate_summary_report(column_names, beam_names):
     try:
         output_file = os.path.join(SCRIPT_DIRECTORY, 'design_forces_summary_report.txt')
 
-        # **修改部分**: 检查新的梁包络文件和其他可能的文件
+        # 检查CSV文件是否存在并统计记录数
         column_csv = os.path.join(SCRIPT_DIRECTORY, 'column_design_forces.csv')
-        beam_envelope_csv = os.path.join(SCRIPT_DIRECTORY, 'beam_flexure_envelope.csv')
-        beam_forces_csv = os.path.join(SCRIPT_DIRECTORY, 'beam_design_forces.csv')
+        beam_csv = os.path.join(SCRIPT_DIRECTORY, 'beam_design_forces.csv')
 
         column_records = 0
         beam_records = 0
-        beam_file_used = "N/A"
-        is_envelope_data = False
 
         if os.path.exists(column_csv):
             with open(column_csv, 'r', encoding='utf-8-sig') as f:
                 column_records = sum(1 for line in f) - 1  # 减去表头
 
-        if os.path.exists(beam_envelope_csv):
-            with open(beam_envelope_csv, 'r', encoding='utf-8-sig') as f:
-                beam_records = sum(1 for line in f) - 1
-                beam_file_used = 'beam_flexure_envelope.csv'
-                is_envelope_data = True
-        elif os.path.exists(beam_forces_csv):
-            with open(beam_forces_csv, 'r', encoding='utf-8-sig') as f:
-                beam_records = sum(1 for line in f) - 1
-                beam_file_used = 'beam_design_forces.csv'
-                is_envelope_data = False
+        if os.path.exists(beam_csv):
+            with open(beam_csv, 'r', encoding='utf-8-sig') as f:
+                beam_records = sum(1 for line in f) - 1  # 减去表头
 
         with open(output_file, 'w', encoding='utf-8') as f:
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             f.write("=" * 80 + "\n")
-            f.write("构件设计结果提取汇总报告\n")
+            f.write("构件设计内力提取汇总报告\n")
             f.write(f"报告生成时间: {now}\n")
             f.write("=" * 80 + "\n\n")
 
             f.write("📄 提取文件列表\n")
             f.write("-" * 40 + "\n")
             f.write("1. column_design_forces.csv - 框架柱设计内力详细数据\n")
-            f.write(f"2. {beam_file_used} - 框架梁设计结果详细数据\n")
+            f.write("2. beam_design_forces.csv - 框架梁设计内力详细数据\n")
             f.write("3. design_forces_summary_report.txt - 本汇总报告\n")
             f.write("\n")
 
@@ -865,41 +917,32 @@ def generate_summary_report(column_names, beam_names):
             f.write(f"请求提取的框架梁数量: {len(beam_names)}\n")
             f.write(f"实际提取的框架梁记录数: {beam_records}\n\n")
 
-            f.write("📋 数据字段说明 (根据提取的表格)\n")
+            f.write("📋 数据字段说明\n")
             f.write("-" * 40 + "\n")
-            if is_envelope_data:
-                f.write("梁数据来自 'Concrete Beam Flexure Envelope' 表格:\n")
-                f.write("-ve Moment   - 负弯矩 (kN·m)\n")
-                f.write("+ve Moment   - 正弯矩 (kN·m)\n")
-                f.write("As Top       - 顶部配筋面积 (mm^2)\n")
-                f.write("As Bottom    - 底部配筋面积 (mm^2) (若存在)\n")
-                f.write("V            - 剪力 (kN) (若存在)\n")
-            else:
-                f.write("梁数据来自 'Design Forces' 表格:\n")
-                f.write("P    - 轴力 (kN)\n")
-                f.write("V2   - Y方向剪力 (kN)\n")
-                f.write("V3   - Z方向剪力 (kN)\n")
-                f.write("T    - 扭矩 (kN·m)\n")
-                f.write("M2   - Y轴弯矩 (kN·m)\n")
-                f.write("M3   - Z轴弯矩 (kN·m)\n")
-
-            f.write("\n柱数据字段通常包括 P, V2, V3, M2, M3 等。\n\n")
+            f.write("P    - 轴力 (kN)\n")
+            f.write("V2   - Y方向剪力 (kN)\n")
+            f.write("V3   - Z方向剪力 (kN)\n")
+            f.write("T    - 扭矩 (kN·m)\n")
+            f.write("M2   - Y轴弯矩 (kN·m)\n")
+            f.write("M3   - Z轴弯矩 (kN·m)\n")
+            f.write("Combo - 荷载组合名称\n")
+            f.write("Station/Location - 构件位置坐标\n\n")
 
             f.write("⚠️ 重要说明\n")
             f.write("-" * 40 + "\n")
-            f.write("1. 本脚本提取的是设计结果或设计内力，请注意区分。\n")
-            f.write("2. 包络(Envelope)数据通常包含最终配筋，更具参考价值。\n")
+            f.write("1. 设计内力为各荷载组合下的包络设计内力值。\n")
+            f.write("2. 本脚本提取的是设计内力，而非分析内力。\n")
             f.write("3. 请结合ETABS设计结果和相关规范，对数据进行核对与使用。\n")
             f.write("4. 建议进行人工复核重要构件的设计结果。\n")
             f.write("5. 本报告仅供参考，最终设计以正式图纸为准。\n")
-            f.write("6. 如果提取记录数为0，请检查构件设计是否完成且目标表格存在。\n")
+            f.write("6. 如果提取记录数为0，请检查构件设计是否完成。\n")
             f.write("\n")
 
             f.write("=" * 80 + "\n")
             f.write("报告生成完成\n")
             f.write("=" * 80 + "\n")
 
-        print(f"✅ 设计结果汇总报告已保存至: {output_file}")
+        print(f"✅ 设计内力汇总报告已保存至: {output_file}")
         return True
 
     except Exception as e:
@@ -911,16 +954,16 @@ def generate_summary_report(column_names, beam_names):
 def print_extraction_summary():
     """打印提取结果汇总"""
     print("\n" + "=" * 60)
-    print("📋 构件设计结果提取完成汇总")
+    print("📋 构件设计内力提取完成汇总")
     print("=" * 60)
     print("✅ 已生成的文件:")
-    print("   1. column_design_forces.csv - 框架柱设计内力/结果")
-    print("   2. beam_flexure_envelope.csv (或 beam_design_forces.csv) - 框架梁设计结果")
+    print("   1. column_design_forces.csv - 框架柱设计内力")
+    print("   2. beam_design_forces.csv - 框架梁设计内力")
     print("   3. design_forces_summary_report.txt - 提取任务汇总报告")
     print()
     print("📊 内容包括:")
-    print("   • 各构件在不同荷载组合下的设计内力或包络值")
-    print("   • 可能包含轴力(P)、剪力(V)、弯矩(M)、扭矩(T)、配筋面积(As)")
+    print("   • 各构件在不同荷载组合下的设计内力值")
+    print("   • 轴力(P)、剪力(V2,V3)、弯矩(M2,M3)、扭矩(T)")
     print("   • 构件位置信息(Story, Station/Location)")
     print("   • 荷载组合名称(Combo)")
     print("=" * 60)
@@ -946,15 +989,11 @@ def test_simple_api_call(sap_model, table_key):
 
         db = sap_model.DatabaseTables
 
-        # 请求简单字段，如果失败则请求空字段
-        try:
-            field_key_list = System.Array.CreateInstance(System.String, 3)
-            field_key_list[0] = "Story"
-            field_key_list[1] = "Column" if "Column" in table_key else "Beam" if "Beam" in table_key else "Label"
-            field_key_list[2] = "UniqueName"
-        except:
-            field_key_list = System.Array.CreateInstance(System.String, 1)
-            field_key_list[0] = ""
+        # 只请求3个简单字段
+        field_key_list = System.Array.CreateInstance(System.String, 3)
+        field_key_list[0] = "Story"
+        field_key_list[1] = "Column" if "Column" in table_key else "Beam"
+        field_key_list[2] = "UniqueName"
 
         group_name = ""
         table_version = System.Int32(0)
@@ -977,21 +1016,28 @@ def test_simple_api_call(sap_model, table_key):
         if isinstance(ret, tuple) and len(ret) >= 6:
             error_code = ret[0]
             if error_code == 0:
-                fields_included = ret[3]
-                num_records = ret[4]
-                data_array = ret[5]
+                # 按照新理解的结构解析
+                fields_included = ret[3]  # 字段列表
+                num_records = ret[4]  # 记录数
+                data_array = ret[5]  # 数据数组
 
                 print(f"✅ 成功调用，解析结果:")
-                print(f"   记录数: {num_records}")
+                print(f"   字段数组类型: {type(fields_included)}")
+                print(f"   记录数类型: {type(num_records)}, 值: {num_records}")
+                print(f"   数据数组类型: {type(data_array)}")
 
                 if hasattr(fields_included, '__len__'):
+                    print(f"   字段数组长度: {len(fields_included)}")
                     field_list = [str(fields_included[i]) for i in range(len(fields_included))]
                     print(f"   字段列表: {field_list}")
 
-                if hasattr(data_array, '__len__') and len(data_array) > 0:
-                    sample_size = min(15, len(data_array))
-                    sample_data = [str(data_array[i]) for i in range(sample_size)]
-                    print(f"   数据样本: {sample_data}")
+                if hasattr(data_array, '__len__'):
+                    print(f"   数据数组长度: {len(data_array)}")
+                    # 显示前几条数据
+                    if len(data_array) > 0:
+                        sample_size = min(15, len(data_array))  # 显示前5行数据 (3字段 x 5行 = 15)
+                        sample_data = [str(data_array[i]) for i in range(sample_size)]
+                        print(f"   数据样本: {sample_data}")
 
                 return ret
             else:
@@ -1003,13 +1049,9 @@ def test_simple_api_call(sap_model, table_key):
 
     except Exception as e:
         print(f"❌ 简单API测试失败: {e}")
-        # traceback.print_exc() # 调试时可取消注释
+        traceback.print_exc()
         return None
 
-
-# ... (The rest of the file remains unchanged)
-# The functions debug_api_return_structure, debug_available_tables,
-# extract_basic_frame_forces, and the __main__ block are not modified.
 
 def debug_api_return_structure(sap_model, table_key):
     """
@@ -1065,6 +1107,35 @@ def debug_api_return_structure(sap_model, table_key):
                             print(f"       内容: {[str(item[j]) for j in range(min(5, len(item)))]}")
                     except:
                         pass
+
+        # 尝试使用具体字段
+        print(f"\n🔍 尝试使用具体字段...")
+        field_key_list2 = System.Array.CreateInstance(System.String, 3)
+        field_key_list2[0] = "Story"
+        field_key_list2[1] = "Column" if "Column" in table_key else "Beam"
+        field_key_list2[2] = "P"
+
+        ret2 = db.GetTableForDisplayArray(
+            table_key,
+            field_key_list2,
+            group_name,
+            table_version,
+            fields_keys_included,
+            number_records,
+            table_data
+        )
+
+        print(f"📊 具体字段API返回值类型: {type(ret2)}")
+        if isinstance(ret2, tuple):
+            print(f"📊 具体字段元组长度: {len(ret2)}")
+            for i, item in enumerate(ret2):
+                print(f"   [{i}] 类型: {type(item)}")
+                if hasattr(item, '__len__') and not isinstance(item, (str, int, float)):
+                    try:
+                        print(f"       长度: {len(item)}")
+                    except:
+                        pass
+
     except Exception as e:
         print(f"❌ 调试API结构时出错: {e}")
         traceback.print_exc()
@@ -1090,16 +1161,13 @@ def debug_available_tables(sap_model):
 
         db = sap_model.DatabaseTables
 
-        # 尝试获取表格列表
-        # This is a placeholder list, a full list would be very long.
+        # 尝试获取表格列表的常见方法
         common_tables = [
             "Analysis Results", "Design Results", "Element Forces - Frames",
             "Modal Information", "Story Drifts", "Joint Reactions",
             "Design Forces - Beams", "Design Forces - Columns",
-            "Concrete Column Design - P-M-M Design Forces",
-            "Concrete Beam Design - Flexural & Shear Forces",
-            "Concrete Beam Flexure Envelope - Chinese 2010",
-            "Concrete Column Envelope - Chinese 2010"
+            "Concrete Column Design", "Concrete Beam Design",
+            "Steel Design", "Composite Beam Design"
         ]
 
         available_tables = []
@@ -1125,7 +1193,11 @@ def debug_available_tables(sap_model):
                     table_data
                 )
 
-                if (isinstance(ret, tuple) and ret[0] == 0) or ret == 0:
+                if isinstance(ret, tuple):
+                    error_code = ret[0]
+                    if error_code == 0:
+                        available_tables.append(table)
+                elif ret == 0:
                     available_tables.append(table)
 
             except Exception as e:
@@ -1137,6 +1209,10 @@ def debug_available_tables(sap_model):
 
         if not available_tables:
             print("❌ 未找到任何可用表格")
+            print("💡 可能的原因:")
+            print("   1. 模型未完成分析")
+            print("   2. 模型未完成设计")
+            print("   3. API连接问题")
 
         return available_tables
 
@@ -1158,7 +1234,6 @@ def extract_basic_frame_forces(sap_model, column_names, beam_names):
     Returns:
         bool: 提取是否成功
     """
-    # This function is unchanged.
     try:
         print("🔧 尝试提取基本构件分析内力...")
 
@@ -1170,9 +1245,13 @@ def extract_basic_frame_forces(sap_model, column_names, beam_names):
             return False
 
         db = sap_model.DatabaseTables
+
+        # 尝试提取基本的构件内力表格
         table_key = "Element Forces - Frames"
+
         print(f"🔍 尝试访问表格: {table_key}")
 
+        # 创建空字段列表来获取所有字段
         field_key_list = System.Array.CreateInstance(System.String, 1)
         field_key_list[0] = ""
 
@@ -1183,20 +1262,32 @@ def extract_basic_frame_forces(sap_model, column_names, beam_names):
         table_data = System.Array.CreateInstance(System.String, 0)
 
         ret = db.GetTableForDisplayArray(
-            table_key, field_key_list, group_name, table_version,
-            fields_keys_included, number_records, table_data
+            table_key,
+            field_key_list,
+            group_name,
+            table_version,
+            fields_keys_included,
+            number_records,
+            table_data
         )
 
-        success = (isinstance(ret, tuple) and ret[0] == 0) or (ret == 0)
+        success = False
+        if isinstance(ret, tuple):
+            error_code = ret[0]
+            if error_code == 0:
+                success = True
+        elif ret == 0:
+            success = True
 
         if not success:
             print(f"❌ 无法访问基本内力表格")
             return False
 
+        # 解析结果
         if isinstance(ret, tuple) and len(ret) >= 6:
-            fields_keys_included = ret[3]
-            number_records = ret[4]
-            table_data = ret[5]
+            fields_keys_included = ret[4]
+            number_records = ret[5]
+            table_data = ret[6] if len(ret) > 6 else ret[5]
 
             field_keys_list = [str(field) for field in fields_keys_included] if fields_keys_included else []
             num_records = int(number_records) if hasattr(number_records, '__int__') else 0
@@ -1206,22 +1297,34 @@ def extract_basic_frame_forces(sap_model, column_names, beam_names):
             else:
                 table_data_list = []
 
-            if num_records == 0:
-                print("❌ 基本内力表格中没有数据")
-                return False
+        if num_records == 0:
+            print("❌ 基本内力表格中没有数据")
+            return False
 
-            output_file = os.path.join(SCRIPT_DIRECTORY, 'basic_frame_forces.csv')
-            with open(output_file, 'w', newline='', encoding='utf-8-sig') as csvfile:
-                writer = csv.writer(csvfile)
-                writer.writerow(field_keys_list)
-                num_fields = len(field_keys_list)
-                if num_fields > 0:
-                    data_rows = [table_data_list[i:i + num_fields] for i in range(0, len(table_data_list), num_fields)]
-                    for row in data_rows:
-                        writer.writerow(row)
-            print(f"✅ 基本构件内力数据已保存至: {output_file}")
-            return True
-        return False
+        print(f"📋 基本内力表格包含 {num_records} 条记录")
+        print(f"📝 可用字段: {field_keys_list}")
+
+        # 保存基本内力数据
+        output_file = os.path.join(SCRIPT_DIRECTORY, 'basic_frame_forces.csv')
+
+        with open(output_file, 'w', newline='', encoding='utf-8-sig') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(field_keys_list)
+
+            num_fields = len(field_keys_list)
+            if num_fields > 0:
+                data_rows = [table_data_list[i:i + num_fields] for i in
+                             range(0, len(table_data_list), num_fields)]
+
+                # 保存所有数据（因为我们无法准确区分设计构件）
+                for row in data_rows:
+                    writer.writerow(row)
+
+        print(f"✅ 基本构件内力数据已保存至: {output_file}")
+        print("💡 注意: 这是分析内力，不是设计内力")
+
+        return True
+
     except Exception as e:
         print(f"❌ 提取基本构件内力失败: {e}")
         traceback.print_exc()
@@ -1229,7 +1332,7 @@ def extract_basic_frame_forces(sap_model, column_names, beam_names):
 
 
 if __name__ == "__main__":
-    # This block is unchanged.
+    # 测试代码
     print("此模块是ETABS自动化项目的一部分，应在主程序 main.py 中调用。")
     print("直接运行此文件不会执行任何ETABS操作。")
     print("请运行 main.py 来执行完整的建模和设计流程。")
@@ -1238,6 +1341,7 @@ if __name__ == "__main__":
     print("2. 已运行 setup_etabs() 初始化连接")
     print("3. 已完成混凝土构件设计计算")
 
+    # 可以添加简单的调试测试
     try:
         from etabs_setup import get_sap_model, ensure_etabs_ready
 
