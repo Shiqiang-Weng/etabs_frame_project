@@ -53,7 +53,7 @@ extract_design_forces_and_summary, design_force_extraction_available = _import_o
 def print_project_info():
     """打印项目和脚本配置信息"""
     print("=" * 80)
-    print(f"ETABS 框架结构自动建模脚本 v7.0 (优化版)")
+    print("ETABS 框架结构自动建模脚本 v7.0 (优化版)")
     print("=" * 80)
     print("模块状态:")
     print(f"- 设计模块: {'✅ 可用' if design_module_available else '❌ 不可用'}")
@@ -180,7 +180,9 @@ def generate_final_report(start_time, workflow_state):
         print(f"   - 设计报告: design_summary_report.txt")
     if workflow_state.get('force_extraction_completed'):
         print(f"   - 柱设计内力: column_design_forces.csv")
-        print(f"   - 梁设计内力: beam_design_forces.csv")
+        print(f"   - 梁设计结果: beam_flexure_envelope.csv 或 beam_design_forces.csv")
+        print(f"   - 柱剪力包络: column_shear_envelope.csv (若存在)")
+        print(f"   - 节点包络: joint_envelope.csv (若存在)")
         print(f"   - 内力汇总: design_forces_summary_report.txt")
 
     print("=" * 80)
@@ -209,11 +211,11 @@ def main():
         run_design_and_force_extraction(workflow_state, column_names, beam_names)
 
     except SystemExit as e:
-        print(f"\n--- 脚本已中止 ---")
+        print("\n--- 脚本已中止 ---")
         if e.code != 0:
             print(f"退出代码: {e.code}")
     except Exception as e:
-        print(f"\n--- 未预料的运行时错误 ---")
+        print("\n--- 未预料的运行时错误 ---")
         print(f"错误类型: {type(e).__name__}: {e}")
         traceback.print_exc()
         cleanup_etabs_on_error()
