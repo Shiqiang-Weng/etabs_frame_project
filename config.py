@@ -86,3 +86,6 @@ COMException = None
 # ========== Concrete Design Parameters (GB50010-2010) ==========
 PERFORM_CONCRETE_DESIGN = True
 CONCRETE_DESIGN_CODE = "GB 50010-2010(2015)" # Chinese Concrete Design Code
+
+# 是否导出全部设计 CSV（调试用途），默认仅导出核心文件
+EXPORT_ALL_DESIGN_FILES = False

@@ -3,6 +3,7 @@ import sys
 import time
 import traceback
 import os
+from pathlib import Path
 
 # 导入配置和核心模块
 from config import *
@@ -14,9 +15,10 @@ from load_cases import define_all_load_cases
 from frame_geometry import create_frame_structure
 from load_assignment import assign_all_loads_to_frame_structure
 from analysis_module import wait_and_run_analysis, check_analysis_completion
-from results_extraction import extract_all_analysis_results
 from file_operations import finalize_and_save_model, cleanup_etabs_on_error, check_output_directory
 from member_force_extraction import extract_and_save_frame_forces
+from results_extraction.analysis_results_module import extract_modal_and_drift
+from results_extraction.core_results_module import export_core_results
 
 
 # --- 模块动态导入 ---
@@ -98,11 +100,12 @@ def run_analysis_and_results_extraction(sap_model, frame_element_names):
     wait_and_run_analysis(5)
     if not check_analysis_completion():
         print("⚠️ 分析状态检查异常，但继续尝试提取结果。")
-    extract_all_analysis_results()
+    dynamic_summary_path = extract_modal_and_drift(sap_model, SCRIPT_DIRECTORY)
+    print(f"动态分析结果概要已写入 Excel: {dynamic_summary_path}")
     extract_and_save_frame_forces(frame_element_names)
 
 
-def run_design_and_force_extraction(workflow_state, column_names, beam_names):
+def run_design_and_force_extraction(workflow_state, sap_model, column_names, beam_names):
     """阶段八和九：构件设计与设计内力提取"""
     if not PERFORM_CONCRETE_DESIGN:
         print("\n⏭️ 阶段八 & 九：根据配置跳过构件设计和内力提取。")
@@ -125,23 +128,45 @@ def run_design_and_force_extraction(workflow_state, column_names, beam_names):
         traceback.print_exc()
 
     # --- 阶段九：设计内力提取 ---
-    print("\n🔬 阶段九：构件设计内力提取")
+    print("\n阶段九：构件设计内力提取")
     if not workflow_state['design_completed']:
-        print("⏭️ 因设计阶段未成功，跳过设计内力提取。")
+        print("因设计阶段未成功，跳过设计内力提取。")
+        return
+
+    core_files = export_core_results(sap_model, SCRIPT_DIRECTORY)
+    expected_core_keys = {
+        "analysis_dynamic_summary",
+        "beam_flexure_envelope",
+        "beam_shear_envelope",
+        "column_pmm_design_forces_raw",
+        "column_shear_envelope",
+    }
+    if core_files:
+        print("\n核心结果文件：")
+        for name, path in core_files.items():
+            print(f"  - {name}: {path}")
+    missing_keys = {name for name, path in core_files.items() if not Path(path).exists()}
+    workflow_state['force_extraction_completed'] = not missing_keys
+    if missing_keys:
+        print(f"⚠️ 核心结果缺少: {sorted(missing_keys)}")
+
+    if not EXPORT_ALL_DESIGN_FILES:
+        print("已生成核心结果文件，跳过全量设计 CSV 导出。")
         return
     if not design_force_extraction_available:
-        print("⏭️ 设计内力提取模块不可用，跳过。")
+        print("设计内力提取模块不可用，跳过。")
         return
 
     try:
         if extract_design_forces_and_summary(column_names, beam_names):
-            print("✅ 构件设计内力提取成功。")
+            print("构件设计内力提取成功（全量导出）。")
             workflow_state['force_extraction_completed'] = True
         else:
-            print("⚠️ 构件设计内力提取失败，请检查日志。")
+            print("构件设计内力提取失败，请检查日志。")
     except Exception as e:
-        print(f"❌ 设计内力提取模块发生严重错误: {e}")
+        print(f"设计内力提取模块发生严重错误: {e}")
         traceback.print_exc()
+
 
 
 def generate_final_report(start_time, workflow_state):
@@ -179,11 +204,13 @@ def generate_final_report(start_time, workflow_state):
         print(f"   - 配筋结果: concrete_design_results.csv")
         print(f"   - 设计报告: design_summary_report.txt")
     if workflow_state.get('force_extraction_completed'):
-        print(f"   - 柱设计内力: column_design_forces.csv")
-        print(f"   - 梁设计结果: beam_flexure_envelope.csv 或 beam_design_forces.csv")
-        print(f"   - 柱剪力包络: column_shear_envelope.csv (若存在)")
-        print(f"   - 节点包络: joint_envelope.csv (若存在)")
-        print(f"   - 内力汇总: design_forces_summary_report.txt")
+        print(f"   - 动态分析概要: analysis_dynamic_summary.xlsx")
+        print(f"   - 梁弯矩包络: beam_flexure_envelope.csv")
+        print(f"   - 梁剪力包络: beam_shear_envelope.csv")
+        print(f"   - 柱 P-M-M 原始: column_pmm_design_forces_raw.csv")
+        print(f"   - 柱剪力包络: column_shear_envelope.csv")
+        if EXPORT_ALL_DESIGN_FILES:
+            print(f"   - 其他设计输出：已启用全量导出，请查看目录。")
 
     print("=" * 80)
 
@@ -208,7 +235,7 @@ def main():
         run_analysis_and_results_extraction(sap_model, column_names + beam_names)
 
         # 执行可选的设计和内力提取流程
-        run_design_and_force_extraction(workflow_state, column_names, beam_names)
+        run_design_and_force_extraction(workflow_state, sap_model, column_names, beam_names)
 
     except SystemExit as e:
         print("\n--- 脚本已中止 ---")
