@@ -18,10 +18,19 @@ from etabs_api_loader import get_api_objects
 
 ETABSv1, System, COMException = get_api_objects()
 
+
+def _ensure_api_objects():
+    """Lazy-refresh ETABS API objects to avoid None during design extraction."""
+    global ETABSv1, System, COMException
+    if System is None or ETABSv1 is None:
+        ETABSv1, System, COMException = get_api_objects()
+    return ETABSv1, System, COMException
+
 # ==================== 整合的数据提取和单位转换修复功能 ====================
 
 def convert_system_array_to_python_list(system_array):
     """将System.Array对象转换为Python列表"""
+    _ensure_api_objects()
     if system_array is None:
         return []
 
@@ -347,6 +356,8 @@ def _get_column_design_summary_enhanced(design_concrete, col_name: str) -> Dict[
 
 def extract_design_results_enhanced() -> List[Dict[str, Any]]:
     """增强版设计结果提取，整合单位转换修复功能"""
+    _ensure_api_objects()
+    _ensure_api_objects()
     _, sap_model = get_etabs_objects()
     print("\n--- 提取设计结果 (整合增强版) ---")
 
@@ -668,25 +679,139 @@ def generate_enhanced_summary_report(output_dir: str):
         print(f"❌ 生成增强版设计摘要报告失败: {e}")
 
 
-def extract_and_save_beam_results(output_dir: str):
+
+
+def extract_and_save_beam_results(output_dir: str) -> None:
     """
-    兼容包装：调用 design_module 中的备用（原版）梁配筋结果提取。
-    延迟导入以避免在未安装 CLR/ETABS 时导入失败。
+    备用版梁配筋结果提取（原设计模块逻辑），用于与增强版结果对比。
     """
-    from design_module import extract_and_save_beam_results as _legacy_beam_extract
+    _ensure_api_objects()
+    _, sap_model = get_etabs_objects()
+    print("\n--- 提取梁设计结果 (原版备用) ---")
+    os.makedirs(output_dir, exist_ok=True)
 
-    return _legacy_beam_extract(output_dir)
+    try:
+        dc = sap_model.DesignConcrete
+
+        number_names = 0
+        frame_names_tuple = System.Array.CreateInstance(System.String, 0)
+        ret, number_names, frame_names_tuple = sap_model.FrameObj.GetNameList(number_names, frame_names_tuple)
+        if ret != 0:
+            print("  无法获取构件列表")
+            return
+
+        frame_names = list(frame_names_tuple)
+        beam_names = [name for name in frame_names if name.upper().startswith("BEAM")]
+
+        if not beam_names:
+            print("  没有找到梁构件")
+            return
+
+        print(f"  找到 {len(beam_names)} 根梁，正在提取配筋...")
+        all_results = []
+        valid_results = 0
+
+        for i, name in enumerate(beam_names):
+            if (i + 1) % 50 == 0:
+                print(f"    进度: {i + 1}/{len(beam_names)}")
+
+            result = {"Frame_Name": name}
+            try:
+                res = dc.GetSummaryResultsBeam(name, 0, [], [], [], [], [], [], [], [], [], [], [], [], [], [])
+                ret_code, num_items, _, _, _, top_areas, _, bot_areas, *_ = res
+
+                if ret_code == 0 and num_items > 0:
+                    top_areas_list = [a for a in convert_system_array_to_python_list(top_areas) if a > 0]
+                    bot_areas_list = [a for a in convert_system_array_to_python_list(bot_areas) if a > 0]
+
+                    max_top = max(top_areas_list) if top_areas_list else 0
+                    max_bot = max(bot_areas_list) if bot_areas_list else 0
+
+                    result.update({"Src": "OK", "Top_Rebar_m2": f"{max_top:.6f}", "Bot_Rebar_m2": f"{max_bot:.6f}"})
+                    valid_results += 1
+                else:
+                    result.update({"Src": "No Results", "Top_Rebar_m2": 0, "Bot_Rebar_m2": 0})
+
+            except Exception as exc:  # noqa: BLE001
+                result.update({"Src": f"Error: {str(exc)[:40]}", "Top_Rebar_m2": 0, "Bot_Rebar_m2": 0})
+
+            all_results.append(result)
+
+        filepath = os.path.join(output_dir, "beam_design_results_final.csv")
+        with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.DictWriter(f, fieldnames=all_results[0].keys())
+            writer.writeheader()
+            writer.writerows(all_results)
+
+        print(f"✅ 原版梁设计结果已保存: {filepath}")
+        print(f"   有效结果: {valid_results}/{len(beam_names)}")
+
+    except Exception as exc:  # noqa: BLE001
+        print(f"❌ 提取原版梁结果异常: {exc}")
 
 
-def extract_and_save_column_results(output_dir: str):
+def extract_and_save_column_results(output_dir: str) -> None:
     """
-    兼容包装：调用 design_module 中的备用（原版）柱配筋结果提取。
-    延迟导入以避免在未安装 CLR/ETABS 时导入失败。
+    备用版柱配筋结果提取（原设计模块逻辑），用于与增强版结果对比。
     """
-    from design_module import extract_and_save_column_results as _legacy_col_extract
+    _, sap_model = get_etabs_objects()
+    print("\n--- 提取柱设计结果 (原版备用) ---")
+    os.makedirs(output_dir, exist_ok=True)
 
-    return _legacy_col_extract(output_dir)
+    try:
+        dc = sap_model.DesignConcrete
 
+        number_names = 0
+        frame_names_tuple = System.Array.CreateInstance(System.String, 0)
+        ret, number_names, frame_names_tuple = sap_model.FrameObj.GetNameList(number_names, frame_names_tuple)
+        if ret != 0:
+            print("  无法获取构件列表")
+            return
+
+        frame_names = list(frame_names_tuple)
+        column_names = [name for name in frame_names if name.upper().startswith("COL")]
+
+        if not column_names:
+            print("  没有找到柱构件")
+            return
+
+        print(f"  找到 {len(column_names)} 根柱，正在提取配筋...")
+        all_results = []
+        valid_results = 0
+
+        for i, name in enumerate(column_names):
+            if (i + 1) % 50 == 0:
+                print(f"    进度: {i + 1}/{len(column_names)}")
+
+            result = {"Frame_Name": name}
+            try:
+                res = dc.GetSummaryResultsColumn(name, 0, [], [], [], [], [], [], [], [], [], [], [], [])
+                ret_code, num_items, pmm_areas, *_ = res
+
+                if ret_code == 0 and num_items > 0:
+                    areas = [a for a in convert_system_array_to_python_list(pmm_areas) if a > 0]
+                    max_area = max(areas) if areas else 0
+                    result.update({"Src": "OK", "Long_Rebar_m2": f"{max_area:.6f}"})
+                    valid_results += 1
+                else:
+                    result.update({"Src": "No Results", "Long_Rebar_m2": 0})
+
+            except Exception as exc:  # noqa: BLE001
+                result.update({"Src": f"Error: {str(exc)[:40]}", "Long_Rebar_m2": 0})
+
+            all_results.append(result)
+
+        filepath = os.path.join(output_dir, "column_design_results_final.csv")
+        with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.DictWriter(f, fieldnames=all_results[0].keys())
+            writer.writeheader()
+            writer.writerows(all_results)
+
+        print(f"✅ 原版柱设计结果已保存: {filepath}")
+        print(f"   有效结果: {valid_results}/{len(column_names)}")
+
+    except Exception as exc:  # noqa: BLE001
+        print(f"❌ 提取原版柱结果异常: {exc}")
 
 __all__ = [
     'convert_system_array_to_python_list',
