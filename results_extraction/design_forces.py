@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+设计内力提取模块（results_extraction 包入口）
+集中暴露设计内力提取相关的函数，复用现有 design_force_extraction 实现。
+"""
+
+from __future__ import annotations
+
+from design_force_extraction import (
+    check_design_completion,
+    debug_api_return_structure,
+    debug_available_tables,
+    debug_pmm_tables,
+    extract_basic_frame_forces,
+    extract_beam_design_forces,
+    extract_column_design_forces,
+    extract_column_pmm_design_forces,
+    extract_design_forces_and_summary,
+    extract_design_forces_simple,
+    generate_summary_report,
+    print_extraction_summary,
+    test_simple_api_call,
+)
+
+__all__ = [
+    "check_design_completion",
+    "debug_api_return_structure",
+    "debug_available_tables",
+    "debug_pmm_tables",
+    "extract_basic_frame_forces",
+    "extract_beam_design_forces",
+    "extract_column_design_forces",
+    "extract_column_pmm_design_forces",
+    "extract_design_forces_and_summary",
+    "extract_design_forces_simple",
+    "generate_summary_report",
+    "print_extraction_summary",
+    "test_simple_api_call",
+]

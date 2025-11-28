@@ -13,7 +13,7 @@ from typing import Dict, Union
 
 from results_extraction.analysis_results_module import extract_modal_and_drift
 from config import SCRIPT_DIRECTORY
-from design_force_extraction import check_design_completion, extract_design_forces_simple
+from .design_forces import check_design_completion, extract_design_forces_simple
 
 CORE_RESULT_BASENAMES = {
     "analysis_dynamic_summary.xlsx",
