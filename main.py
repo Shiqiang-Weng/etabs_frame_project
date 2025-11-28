@@ -16,7 +16,7 @@ from frame_geometry import create_frame_structure
 from load_assignment import assign_all_loads_to_frame_structure
 from analysis_module import wait_and_run_analysis, check_analysis_completion
 from file_operations import finalize_and_save_model, cleanup_etabs_on_error, check_output_directory
-from member_force_extraction import extract_and_save_frame_forces
+from results_extraction.member_forces import extract_and_save_frame_forces
 from results_extraction.analysis_results_module import extract_modal_and_drift
 from results_extraction.core_results_module import export_core_results
 
@@ -45,11 +45,16 @@ perform_concrete_design_and_extract_results, design_module_available = _import_o
     ['design_module'], 'perform_concrete_design_and_extract_results'
 )
 
-# 动态导入设计内力提取模块 (支持多个备选名称)
-extract_design_forces_and_summary, design_force_extraction_available = _import_optional_module(
-    ['design_force_extraction', 'design_force_extraction_fixed', 'design_force_extraction_improved'],
-    'extract_design_forces_and_summary'
-)
+# 设计内力提取改为固定入口（优先 results_extraction 包，兼容旧模块名）
+try:
+    from results_extraction.design_forces import extract_design_forces_and_summary
+    design_force_extraction_available = True
+    print("✅模块 'results_extraction.design_forces' 导入成功。")
+except Exception:
+    extract_design_forces_and_summary, design_force_extraction_available = _import_optional_module(
+        ['design_force_extraction', 'design_force_extraction_fixed', 'design_force_extraction_improved'],
+        'extract_design_forces_and_summary'
+    )
 
 
 def print_project_info():

@@ -1,11 +1,16 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Deprecated module: fully replaced by results_extraction.design_forces.
-Kept only as a guard; remove from the repo when possible.
+Deprecated compatibility shim for legacy imports.
+Use results_extraction.design_forces instead of this file.
 """
+from warnings import warn
 
-raise ImportError(
-    "design_force_extraction_old.py is deprecated and scheduled for removal; "
-    "import results_extraction.design_forces instead."
+warn(
+    "design_force_extraction_old.py is deprecated; use results_extraction.design_forces",
+    DeprecationWarning,
+    stacklevel=2,
 )
+
+from results_extraction.design_forces import *  # noqa: F401,F403
+from results_extraction.design_forces import __all__

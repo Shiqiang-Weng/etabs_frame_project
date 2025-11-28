@@ -1,10 +1,10 @@
-# main.py
+﻿# main.py
 import sys
 import time
 import traceback
 import os
 
-# 导入所有模块
+# 瀵煎叆鎵€鏈夋ā鍧?
 from config import *
 from etabs_api_loader import load_dotnet_etabs_api
 from etabs_setup import setup_etabs
@@ -16,56 +16,56 @@ from load_assignment import assign_all_loads_to_frame_structure
 from analysis_module import wait_and_run_analysis, check_analysis_completion
 from results_extraction import extract_all_analysis_results
 from file_operations import finalize_and_save_model, cleanup_etabs_on_error, check_output_directory
-from member_force_extraction import extract_and_save_frame_forces
+from results_extraction.member_forces import extract_and_save_frame_forces
 
-# 尝试从 design_module 导入主函数
+# 灏濊瘯浠?design_module 瀵煎叆涓诲嚱鏁?
 try:
     from design_module import perform_concrete_design_and_extract_results
 
     design_module_available = True
-    print("✅ 设计模块导入成功")
+    print("鉁?璁捐妯″潡瀵煎叆鎴愬姛")
 except ImportError as e:
     design_module_available = False
-    print(f"⚠️ 导入设计模块时出现问题: {e}")
-    print("将跳过设计功能...")
+    print(f"鈿狅笍 瀵煎叆璁捐妯″潡鏃跺嚭鐜伴棶棰? {e}")
+    print("灏嗚烦杩囪璁″姛鑳?..")
 
 
-    # 定义一个空的替代函数，使其在未导入时也能正常调用
+    # 瀹氫箟涓€涓┖鐨勬浛浠ｅ嚱鏁帮紝浣垮叾鍦ㄦ湭瀵煎叆鏃朵篃鑳芥甯歌皟鐢?
     def perform_concrete_design_and_extract_results():
-        print("⏭️ 设计模块导入失败，跳过构件设计。")
-        return False  # 返回 False 表示失败
+        print("鈴笍 璁捐妯″潡瀵煎叆澶辫触锛岃烦杩囨瀯浠惰璁°€?)
+        return False  # 杩斿洖 False 琛ㄧず澶辫触
 
-# 尝试导入设计内力提取模块 - 支持多种可能的文件名
+# 尝试导入设计内力提取模块（优先新的 results_extraction 入口）
 design_force_extraction_available = False
 extract_design_forces_and_summary = None
 
-# 尝试不同的模块名称
-possible_modules = [
-    'design_force_extraction_fixed',  # 修复版
-    'design_force_extraction',  # 原版
-    'design_force_extraction_improved'  # 改进版
-]
+try:
+    from results_extraction.design_forces import extract_design_forces_and_summary
 
-for module_name in possible_modules:
-    try:
-        if module_name == 'design_force_extraction_fixed':
-            from design_force_extraction_fixed import extract_design_forces_and_summary
-        elif module_name == 'design_force_extraction':
-            from design_force_extraction import extract_design_forces_and_summary
-        elif module_name == 'design_force_extraction_improved':
-            from design_force_extraction_improved import extract_design_forces_and_summary
+    design_force_extraction_available = True
+    print("✅设计内力提取模块导入成功: results_extraction.design_forces")
+except Exception as primary_error:
+    print(f"⚠️ 首选设计内力提取模块导入失败: {primary_error}")
 
-        design_force_extraction_available = True
-        print(f"✅ 设计内力提取模块导入成功: {module_name}")
-        break
-    except ImportError as e:
-        print(f"⚠️ 尝试导入 {module_name} 失败: {e}")
-        continue
+    possible_modules = [
+        'design_force_extraction',
+        'design_force_extraction_fixed',
+        'design_force_extraction_improved',
+    ]
 
-# 如果所有尝试都失败，定义空函数
+    for module_name in possible_modules:
+        try:
+            module = __import__(module_name, fromlist=['extract_design_forces_and_summary'])
+            extract_design_forces_and_summary = getattr(module, 'extract_design_forces_and_summary')
+            design_force_extraction_available = True
+            print(f"✅设计内力提取模块导入成功: {module_name}")
+            break
+        except ImportError as e:
+            print(f"⚠️ 尝试导入 {module_name} 失败: {e}")
+            continue
+
 if not design_force_extraction_available:
-    print("⚠️ 所有设计内力提取模块导入失败，将跳过设计内力提取功能...")
-
+    print("⚠️ 所有设计内力提取模块导入失败，将跳过设计内力提取功能。")
 
     def extract_design_forces_and_summary(column_names, beam_names):
         print("⏭️ 设计内力提取模块导入失败，跳过设计内力提取。")
@@ -73,240 +73,241 @@ if not design_force_extraction_available:
 
 
 def print_project_info():
-    """打印项目信息"""
+    """鎵撳嵃椤圭洰淇℃伅"""
     print("=" * 80)
-    print("ETABS 框架结构自动建模脚本 v6.3.1 (设计模块 v12.1)")
+    print("ETABS 妗嗘灦缁撴瀯鑷姩寤烘ā鑴氭湰 v6.3.1 (璁捐妯″潡 v12.1)")
     print("=" * 80)
-    print("项目特点：")
-    print("1. 10层钢筋混凝土框架结构")
-    print("2. 采用框架柱和框架梁体系")
-    print("3. 楼板设置为膜单元（面外刚度为0）")
-    print("4. 基于GB50011-2010反应谱分析")
-    print("5. 自动提取模态信息、层间位移角和构件内力")
-    print("6. 执行GB50010-2010混凝土构件配筋设计")
-    print("7. 提取构件设计内力数据")
-    print("8. 完全模块化设计，便于维护和扩展")
+    print("椤圭洰鐗圭偣锛?)
+    print("1. 10灞傞挗绛嬫贩鍑濆湡妗嗘灦缁撴瀯")
+    print("2. 閲囩敤妗嗘灦鏌卞拰妗嗘灦姊佷綋绯?)
+    print("3. 妤兼澘璁剧疆涓鸿啘鍗曞厓锛堥潰澶栧垰搴︿负0锛?)
+    print("4. 鍩轰簬GB50011-2010鍙嶅簲璋卞垎鏋?)
+    print("5. 鑷姩鎻愬彇妯℃€佷俊鎭€佸眰闂翠綅绉昏鍜屾瀯浠跺唴鍔?)
+    print("6. 鎵цGB50010-2010娣峰嚌鍦熸瀯浠堕厤绛嬭璁?)
+    print("7. 鎻愬彇鏋勪欢璁捐鍐呭姏鏁版嵁")
+    print("8. 瀹屽叏妯″潡鍖栬璁★紝渚夸簬缁存姢鍜屾墿灞?)
     print()
-    print("模块状态：")
-    print(f"- 设计模块: {'✅ 可用' if design_module_available else '❌ 不可用'}")
-    print(f"- 设计内力提取模块: {'✅ 可用' if design_force_extraction_available else '❌ 不可用'}")
+    print("妯″潡鐘舵€侊細")
+    print(f"- 璁捐妯″潡: {'鉁?鍙敤' if design_module_available else '鉂?涓嶅彲鐢?}")
+    print(f"- 璁捐鍐呭姏鎻愬彇妯″潡: {'鉁?鍙敤' if design_force_extraction_available else '鉂?涓嶅彲鐢?}")
     print()
-    print("结构参数：")
-    print(f"- 楼层数：{NUM_STORIES}层")
-    print(f"- 网格：{NUM_GRID_LINES_X}×{NUM_GRID_LINES_Y} ({SPACING_X}m×{SPACING_Y}m)")
-    print(f"- 框架柱：{FRAME_COLUMN_WIDTH}m×{FRAME_COLUMN_HEIGHT}m")
-    print(f"- 框架梁：{FRAME_BEAM_WIDTH}m×{FRAME_BEAM_HEIGHT}m")
-    print(f"- 楼板厚度：{SLAB_THICKNESS}m (膜单元)")
-    print(f"- 层高：首层{BOTTOM_STORY_HEIGHT}m，标准层{TYPICAL_STORY_HEIGHT}m")
-    print(f"- 总高度：{BOTTOM_STORY_HEIGHT + (NUM_STORIES - 1) * TYPICAL_STORY_HEIGHT:.1f}m")
+    print("缁撴瀯鍙傛暟锛?)
+    print(f"- 妤煎眰鏁帮細{NUM_STORIES}灞?)
+    print(f"- 缃戞牸锛歿NUM_GRID_LINES_X}脳{NUM_GRID_LINES_Y} ({SPACING_X}m脳{SPACING_Y}m)")
+    print(f"- 妗嗘灦鏌憋細{FRAME_COLUMN_WIDTH}m脳{FRAME_COLUMN_HEIGHT}m")
+    print(f"- 妗嗘灦姊侊細{FRAME_BEAM_WIDTH}m脳{FRAME_BEAM_HEIGHT}m")
+    print(f"- 妤兼澘鍘氬害锛歿SLAB_THICKNESS}m (鑶滃崟鍏?")
+    print(f"- 灞傞珮锛氶灞倇BOTTOM_STORY_HEIGHT}m锛屾爣鍑嗗眰{TYPICAL_STORY_HEIGHT}m")
+    print(f"- 鎬婚珮搴︼細{BOTTOM_STORY_HEIGHT + (NUM_STORIES - 1) * TYPICAL_STORY_HEIGHT:.1f}m")
     print()
-    print("地震参数：")
-    print(f"- 设防烈度：{RS_DESIGN_INTENSITY}度")
-    print(f"- 最大地震影响系数：{RS_BASE_ACCEL_G}")
-    print(f"- 场地类别：{RS_SITE_CLASS}类")
-    print(f"- 特征周期：{RS_CHARACTERISTIC_PERIOD}s")
-    print(f"- 地震分组：第{RS_SEISMIC_GROUP}组")
+    print("鍦伴渿鍙傛暟锛?)
+    print(f"- 璁鹃槻鐑堝害锛歿RS_DESIGN_INTENSITY}搴?)
+    print(f"- 鏈€澶у湴闇囧奖鍝嶇郴鏁帮細{RS_BASE_ACCEL_G}")
+    print(f"- 鍦哄湴绫诲埆锛歿RS_SITE_CLASS}绫?)
+    print(f"- 鐗瑰緛鍛ㄦ湡锛歿RS_CHARACTERISTIC_PERIOD}s")
+    print(f"- 鍦伴渿鍒嗙粍锛氱{RS_SEISMIC_GROUP}缁?)
     print()
-    print("设计参数：")
-    print(f"- 使用ETABS默认混凝土设计规范")
-    print(f"- 是否执行配筋设计：{'是' if PERFORM_CONCRETE_DESIGN else '否'}")
-    print(f"- 是否提取设计内力：{'是' if PERFORM_CONCRETE_DESIGN and design_force_extraction_available else '否'}")
+    print("璁捐鍙傛暟锛?)
+    print(f"- 浣跨敤ETABS榛樿娣峰嚌鍦熻璁¤鑼?)
+    print(f"- 鏄惁鎵ц閰嶇瓔璁捐锛歿'鏄? if PERFORM_CONCRETE_DESIGN else '鍚?}")
+    print(f"- 鏄惁鎻愬彇璁捐鍐呭姏锛歿'鏄? if PERFORM_CONCRETE_DESIGN and design_force_extraction_available else '鍚?}")
     print("=" * 80)
 
 
 def main():
-    """主函数 - 框架结构建模流程"""
+    """涓诲嚱鏁?- 妗嗘灦缁撴瀯寤烘ā娴佺▼"""
     script_start_time = time.time()
 
-    # 打印项目信息
+    # 鎵撳嵃椤圭洰淇℃伅
     print_project_info()
 
-    # 初始化变量，以防某些阶段被跳过
+    # 鍒濆鍖栧彉閲忥紝浠ラ槻鏌愪簺闃舵琚烦杩?
     column_names, beam_names, slab_names, story_heights = [], [], [], {}
 
     try:
-        # ========== 第一阶段：初始化 ==========
-        print("\n🚀 第一阶段：系统初始化")
+        # ========== 绗竴闃舵锛氬垵濮嬪寲 ==========
+        print("\n馃殌 绗竴闃舵锛氱郴缁熷垵濮嬪寲")
         if not check_output_directory(): sys.exit(1)
         load_dotnet_etabs_api()
         _, sap_model = setup_etabs()
 
-        # ========== 第二阶段：模型定义 ==========
-        print("\n🏗️ 第二阶段：模型定义")
+        # ========== 绗簩闃舵锛氭ā鍨嬪畾涔?==========
+        print("\n馃彈锔?绗簩闃舵锛氭ā鍨嬪畾涔?)
         define_all_materials_and_sections()
         define_response_spectrum_functions_in_etabs()
         define_all_load_cases()
 
-        # ========== 第三阶段：几何建模 ==========
-        print("\n🏢 第三阶段：框架结构建模")
+        # ========== 绗笁闃舵锛氬嚑浣曞缓妯?==========
+        print("\n馃彚 绗笁闃舵锛氭鏋剁粨鏋勫缓妯?)
         column_names, beam_names, slab_names, story_heights = create_frame_structure()
 
-        # ========== 第四阶段：荷载分配 ==========
-        print("\n⚖️ 第四阶段：荷载分配")
+        # ========== 绗洓闃舵锛氳嵎杞藉垎閰?==========
+        print("\n鈿栵笍 绗洓闃舵锛氳嵎杞藉垎閰?)
         assign_all_loads_to_frame_structure(column_names, beam_names, slab_names)
 
-        # ========== 第五阶段：保存模型 ==========
-        print("\n💾 第五阶段：保存模型")
+        # ========== 绗簲闃舵锛氫繚瀛樻ā鍨?==========
+        print("\n馃捑 绗簲闃舵锛氫繚瀛樻ā鍨?)
         finalize_and_save_model()
 
-        # ========== 第六阶段：结构分析 ==========
-        print("\n🔍 第六阶段：结构分析")
+        # ========== 绗叚闃舵锛氱粨鏋勫垎鏋?==========
+        print("\n馃攳 绗叚闃舵锛氱粨鏋勫垎鏋?)
         wait_and_run_analysis(5)
         if not check_analysis_completion():
-            print("⚠️ 分析状态检查异常，但继续尝试提取结果")
+            print("鈿狅笍 鍒嗘瀽鐘舵€佹鏌ュ紓甯革紝浣嗙户缁皾璇曟彁鍙栫粨鏋?)
 
-        # ========== 第七阶段：结果提取 ==========
-        print("\n📊 第七阶段：结果提取")
+        # ========== 绗竷闃舵锛氱粨鏋滄彁鍙?==========
+        print("\n馃搳 绗竷闃舵锛氱粨鏋滄彁鍙?)
         extract_all_analysis_results()
         extract_and_save_frame_forces(column_names + beam_names)
 
-        # ========== 第八阶段：构件设计 ==========
+        # ========== 绗叓闃舵锛氭瀯浠惰璁?==========
         design_completed_successfully = False
         if PERFORM_CONCRETE_DESIGN and design_module_available:
-            print("\n🏗️ 第八阶段：混凝土构件配筋设计")
+            print("\n馃彈锔?绗叓闃舵锛氭贩鍑濆湡鏋勪欢閰嶇瓔璁捐")
             try:
-                # 只调用主函数，它会处理所有内部逻辑和错误
+                # 鍙皟鐢ㄤ富鍑芥暟锛屽畠浼氬鐞嗘墍鏈夊唴閮ㄩ€昏緫鍜岄敊璇?
                 design_completed_successfully = perform_concrete_design_and_extract_results()
 
                 if design_completed_successfully:
-                    print("✅ 设计和结果提取验证通过。")
+                    print("鉁?璁捐鍜岀粨鏋滄彁鍙栭獙璇侀€氳繃銆?)
                 else:
-                    print("⚠️ 设计和结果提取未成功，请检查以上 design_module 日志。")
+                    print("鈿狅笍 璁捐鍜岀粨鏋滄彁鍙栨湭鎴愬姛锛岃妫€鏌ヤ互涓?design_module 鏃ュ織銆?)
 
             except Exception as design_error:
-                print(f"⚠️ 构件设计模块发生未捕获的严重错误: {design_error}")
-                print("错误详情:")
+                print(f"鈿狅笍 鏋勪欢璁捐妯″潡鍙戠敓鏈崟鑾风殑涓ラ噸閿欒: {design_error}")
+                print("閿欒璇︽儏:")
                 traceback.print_exc()
 
             finally:
-                print("✅ 构件设计阶段完成。")  # 无论成功与否都标记阶段完成
+                print("鉁?鏋勪欢璁捐闃舵瀹屾垚銆?)  # 鏃犺鎴愬姛涓庡惁閮芥爣璁伴樁娈靛畬鎴?
         elif PERFORM_CONCRETE_DESIGN and not design_module_available:
-            print("\n⏭️ 第八阶段：跳过构件设计（设计模块不可用）。")
+            print("\n鈴笍 绗叓闃舵锛氳烦杩囨瀯浠惰璁★紙璁捐妯″潡涓嶅彲鐢級銆?)
         else:
-            print("\n⏭️ 第八阶段：跳过构件设计（由config文件设置）。")
+            print("\n鈴笍 绗叓闃舵锛氳烦杩囨瀯浠惰璁★紙鐢眂onfig鏂囦欢璁剧疆锛夈€?)
 
-        # ========== 第九阶段：构件设计内力提取 ==========
+        # ========== 绗節闃舵锛氭瀯浠惰璁″唴鍔涙彁鍙?==========
         design_force_extraction_successful = False
         if (PERFORM_CONCRETE_DESIGN and design_completed_successfully and
                 design_force_extraction_available):
-            print("\n🔬 第九阶段：构件设计内力提取")
+            print("\n馃敩 绗節闃舵锛氭瀯浠惰璁″唴鍔涙彁鍙?)
             try:
-                print("正在提取框架柱和框架梁的设计内力...")
+                print("姝ｅ湪鎻愬彇妗嗘灦鏌卞拰妗嗘灦姊佺殑璁捐鍐呭姏...")
                 design_force_extraction_successful = extract_design_forces_and_summary(
                     column_names, beam_names
                 )
 
                 if design_force_extraction_successful:
-                    print("✅ 构件设计内力提取成功。")
+                    print("鉁?鏋勪欢璁捐鍐呭姏鎻愬彇鎴愬姛銆?)
                 else:
-                    print("⚠️ 构件设计内力提取失败，请检查日志。")
+                    print("鈿狅笍 鏋勪欢璁捐鍐呭姏鎻愬彇澶辫触锛岃妫€鏌ユ棩蹇椼€?)
 
             except Exception as extraction_error:
-                print(f"⚠️ 构件设计内力提取模块发生错误: {extraction_error}")
-                print("错误详情:")
+                print(f"鈿狅笍 鏋勪欢璁捐鍐呭姏鎻愬彇妯″潡鍙戠敓閿欒: {extraction_error}")
+                print("閿欒璇︽儏:")
                 traceback.print_exc()
 
             finally:
-                print("✅ 构件设计内力提取阶段完成。")
+                print("鉁?鏋勪欢璁捐鍐呭姏鎻愬彇闃舵瀹屾垚銆?)
         elif PERFORM_CONCRETE_DESIGN and design_completed_successfully and not design_force_extraction_available:
-            print("\n⏭️ 第九阶段：跳过构件设计内力提取（提取模块不可用）。")
+            print("\n鈴笍 绗節闃舵锛氳烦杩囨瀯浠惰璁″唴鍔涙彁鍙栵紙鎻愬彇妯″潡涓嶅彲鐢級銆?)
         elif PERFORM_CONCRETE_DESIGN and not design_completed_successfully:
-            print("\n⏭️ 第九阶段：跳过构件设计内力提取（设计阶段未成功完成）。")
+            print("\n鈴笍 绗節闃舵锛氳烦杩囨瀯浠惰璁″唴鍔涙彁鍙栵紙璁捐闃舵鏈垚鍔熷畬鎴愶級銆?)
         else:
-            print("\n⏭️ 第九阶段：跳过构件设计内力提取（未执行构件设计）。")
+            print("\n鈴笍 绗節闃舵锛氳烦杩囨瀯浠惰璁″唴鍔涙彁鍙栵紙鏈墽琛屾瀯浠惰璁★級銆?)
 
-        # ========== 完成 ==========
+        # ========== 瀹屾垚 ==========
         elapsed_time = time.time() - script_start_time
         print("\n" + "=" * 80)
-        print("🎉 框架结构建模完成！")
+        print("馃帀 妗嗘灦缁撴瀯寤烘ā瀹屾垚锛?)
         print("=" * 80)
-        print("✅ 主要完成功能:")
-        print(f"   1. {NUM_STORIES}层钢筋混凝土框架结构建模")
-        print(f"   2. 创建了 {len(column_names)} 根框架柱")
-        print(f"   3. 创建了 {len(beam_names)} 根框架梁")
-        print(f"   4. 创建了 {len(slab_names)} 块楼板（膜单元）")
-        print("   5. 完成了荷载分配和地震参数设置")
-        print("   6. 完成了模态分析和反应谱分析")
-        print("   7. 提取了模态信息、层间位移角和构件内力")
+        print("鉁?涓昏瀹屾垚鍔熻兘:")
+        print(f"   1. {NUM_STORIES}灞傞挗绛嬫贩鍑濆湡妗嗘灦缁撴瀯寤烘ā")
+        print(f"   2. 鍒涘缓浜?{len(column_names)} 鏍规鏋舵煴")
+        print(f"   3. 鍒涘缓浜?{len(beam_names)} 鏍规鏋舵")
+        print(f"   4. 鍒涘缓浜?{len(slab_names)} 鍧楁ゼ鏉匡紙鑶滃崟鍏冿級")
+        print("   5. 瀹屾垚浜嗚嵎杞藉垎閰嶅拰鍦伴渿鍙傛暟璁剧疆")
+        print("   6. 瀹屾垚浜嗘ā鎬佸垎鏋愬拰鍙嶅簲璋卞垎鏋?)
+        print("   7. 鎻愬彇浜嗘ā鎬佷俊鎭€佸眰闂翠綅绉昏鍜屾瀯浠跺唴鍔?)
         if PERFORM_CONCRETE_DESIGN and design_module_available:
             if design_completed_successfully:
-                print("   8. 成功完成混凝土构件配筋设计和结果提取。")
+                print("   8. 鎴愬姛瀹屾垚娣峰嚌鍦熸瀯浠堕厤绛嬭璁″拰缁撴灉鎻愬彇銆?)
                 if design_force_extraction_successful:
-                    print("   9. 成功提取构件设计内力数据。")
+                    print("   9. 鎴愬姛鎻愬彇鏋勪欢璁捐鍐呭姏鏁版嵁銆?)
                 else:
-                    print("   9. 构件设计内力提取执行完毕，但未成功。")
+                    print("   9. 鏋勪欢璁捐鍐呭姏鎻愬彇鎵ц瀹屾瘯锛屼絾鏈垚鍔熴€?)
             else:
-                print("   8. 混凝土构件配筋设计执行完毕，但结果提取或验证失败。")
-                print("   9. 跳过构件设计内力提取。")
+                print("   8. 娣峰嚌鍦熸瀯浠堕厤绛嬭璁℃墽琛屽畬姣曪紝浣嗙粨鏋滄彁鍙栨垨楠岃瘉澶辫触銆?)
+                print("   9. 璺宠繃鏋勪欢璁捐鍐呭姏鎻愬彇銆?)
         else:
             if not design_module_available:
-                print("   8. 设计模块不可用，跳过混凝土构件配筋设计。")
-            print("   9. 跳过构件设计内力提取。")
+                print("   8. 璁捐妯″潡涓嶅彲鐢紝璺宠繃娣峰嚌鍦熸瀯浠堕厤绛嬭璁°€?)
+            print("   9. 璺宠繃鏋勪欢璁捐鍐呭姏鎻愬彇銆?)
         print()
-        print("📁 输出文件:")
-        print(f"   模型文件: {MODEL_PATH}")
-        print(f"   构件内力: {os.path.join(SCRIPT_DIRECTORY, 'frame_member_forces.csv')}")
+        print("馃搧 杈撳嚭鏂囦欢:")
+        print(f"   妯″瀷鏂囦欢: {MODEL_PATH}")
+        print(f"   鏋勪欢鍐呭姏: {os.path.join(SCRIPT_DIRECTORY, 'frame_member_forces.csv')}")
         if PERFORM_CONCRETE_DESIGN and design_module_available:
-            print(f"   配筋设计: {os.path.join(SCRIPT_DIRECTORY, 'concrete_design_results.csv')}")
-            print(f"   设计报告: {os.path.join(SCRIPT_DIRECTORY, 'design_summary_report.txt')}")
+            print(f"   閰嶇瓔璁捐: {os.path.join(SCRIPT_DIRECTORY, 'concrete_design_results.csv')}")
+            print(f"   璁捐鎶ュ憡: {os.path.join(SCRIPT_DIRECTORY, 'design_summary_report.txt')}")
             if design_force_extraction_successful:
-                print(f"   柱设计内力: {os.path.join(SCRIPT_DIRECTORY, 'column_design_forces.csv')}")
-                print(f"   梁设计内力: {os.path.join(SCRIPT_DIRECTORY, 'beam_design_forces.csv')}")
-                print(f"   内力汇总: {os.path.join(SCRIPT_DIRECTORY, 'design_forces_summary_report.txt')}")
+                print(f"   鏌辫璁″唴鍔? {os.path.join(SCRIPT_DIRECTORY, 'column_design_forces.csv')}")
+                print(f"   姊佽璁″唴鍔? {os.path.join(SCRIPT_DIRECTORY, 'beam_design_forces.csv')}")
+                print(f"   鍐呭姏姹囨€? {os.path.join(SCRIPT_DIRECTORY, 'design_forces_summary_report.txt')}")
         print()
-        print("🏗️ 结构信息:")
+        print("馃彈锔?缁撴瀯淇℃伅:")
         total_height = BOTTOM_STORY_HEIGHT + (NUM_STORIES - 1) * TYPICAL_STORY_HEIGHT if NUM_STORIES > 0 else 0
-        print(f"   结构类型: {NUM_STORIES}层钢筋混凝土框架结构")
-        print(f"   平面尺寸: {(NUM_GRID_LINES_X - 1) * SPACING_X:.1f}m × {(NUM_GRID_LINES_Y - 1) * SPACING_Y:.1f}m")
-        print(f"   结构总高: {total_height:.1f}m")
-        print(f"   抗震设防: {RS_DESIGN_INTENSITY}度，{RS_SITE_CLASS}类场地")
+        print(f"   缁撴瀯绫诲瀷: {NUM_STORIES}灞傞挗绛嬫贩鍑濆湡妗嗘灦缁撴瀯")
+        print(f"   骞抽潰灏哄: {(NUM_GRID_LINES_X - 1) * SPACING_X:.1f}m 脳 {(NUM_GRID_LINES_Y - 1) * SPACING_Y:.1f}m")
+        print(f"   缁撴瀯鎬婚珮: {total_height:.1f}m")
+        print(f"   鎶楅渿璁鹃槻: {RS_DESIGN_INTENSITY}搴︼紝{RS_SITE_CLASS}绫诲満鍦?)
         print()
-        print(f"⏱️ 总执行时间: {elapsed_time:.2f} 秒")
+        print(f"鈴憋笍 鎬绘墽琛屾椂闂? {elapsed_time:.2f} 绉?)
 
-        # 输出执行状态总结
-        print("\n📋 执行状态总结:")
-        print(f"   ✅ 结构建模: 成功")
-        print(f"   ✅ 结构分析: 成功")
-        print(f"   ✅ 结果提取: 成功")
+        # 杈撳嚭鎵ц鐘舵€佹€荤粨
+        print("\n馃搵 鎵ц鐘舵€佹€荤粨:")
+        print(f"   鉁?缁撴瀯寤烘ā: 鎴愬姛")
+        print(f"   鉁?缁撴瀯鍒嗘瀽: 鎴愬姛")
+        print(f"   鉁?缁撴灉鎻愬彇: 鎴愬姛")
         if PERFORM_CONCRETE_DESIGN:
             if design_module_available:
-                status_design = "成功" if design_completed_successfully else "失败"
-                print(f"   {'✅' if design_completed_successfully else '❌'} 构件设计: {status_design}")
+                status_design = "鎴愬姛" if design_completed_successfully else "澶辫触"
+                print(f"   {'鉁? if design_completed_successfully else '鉂?} 鏋勪欢璁捐: {status_design}")
                 if design_force_extraction_available:
-                    status_force = "成功" if design_force_extraction_successful else "失败"
-                    print(f"   {'✅' if design_force_extraction_successful else '❌'} 设计内力提取: {status_force}")
+                    status_force = "鎴愬姛" if design_force_extraction_successful else "澶辫触"
+                    print(f"   {'鉁? if design_force_extraction_successful else '鉂?} 璁捐鍐呭姏鎻愬彇: {status_force}")
                 else:
-                    print(f"   ⏭️ 设计内力提取: 模块不可用")
+                    print(f"   鈴笍 璁捐鍐呭姏鎻愬彇: 妯″潡涓嶅彲鐢?)
             else:
-                print(f"   ⏭️ 构件设计: 模块不可用")
-                print(f"   ⏭️ 设计内力提取: 跳过")
+                print(f"   鈴笍 鏋勪欢璁捐: 妯″潡涓嶅彲鐢?)
+                print(f"   鈴笍 璁捐鍐呭姏鎻愬彇: 璺宠繃")
         else:
-            print(f"   ⏭️ 构件设计: 跳过")
-            print(f"   ⏭️ 设计内力提取: 跳过")
+            print(f"   鈴笍 鏋勪欢璁捐: 璺宠繃")
+            print(f"   鈴笍 璁捐鍐呭姏鎻愬彇: 璺宠繃")
 
         print("=" * 80)
 
         if not ATTACH_TO_INSTANCE:
-            print("脚本执行完毕，ETABS 将保持打开状态供进一步操作。")
+            print("鑴氭湰鎵ц瀹屾瘯锛孍TABS 灏嗕繚鎸佹墦寮€鐘舵€佷緵杩涗竴姝ユ搷浣溿€?)
 
     except SystemExit as e:
-        print(f"\n--- 脚本已中止 ---")
+        print(f"\n--- 鑴氭湰宸蹭腑姝?---")
         if hasattr(e, 'code') and e.code != 0 and e.code is not None:
-            if not (isinstance(e.code, str) and "关键错误" in e.code):
-                print(f"脚本退出代码: {e.code}")
+            if not (isinstance(e.code, str) and "鍏抽敭閿欒" in e.code):
+                print(f"鑴氭湰閫€鍑轰唬鐮? {e.code}")
 
     except Exception as e:
-        print(f"\n--- 未预料的运行时错误 ---")
-        print(f"错误类型: {type(e).__name__}")
-        print(f"错误信息: {e}")
+        print(f"\n--- 鏈鏂欑殑杩愯鏃堕敊璇?---")
+        print(f"閿欒绫诲瀷: {type(e).__name__}")
+        print(f"閿欒淇℃伅: {e}")
         traceback.print_exc()
         cleanup_etabs_on_error()
         sys.exit(1)
 
     finally:
         final_elapsed_time = time.time() - script_start_time
-        print(f"\n脚本总执行时间: {final_elapsed_time:.2f} 秒。")
+        print(f"\n鑴氭湰鎬绘墽琛屾椂闂? {final_elapsed_time:.2f} 绉掋€?)
 
 
 if __name__ == "__main__":
     main()
+
