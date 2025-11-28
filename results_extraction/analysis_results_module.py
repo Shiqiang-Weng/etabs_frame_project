@@ -8,16 +8,329 @@
 from __future__ import annotations
 
 import io
+import re
 import sys
 import traceback
 from contextlib import contextmanager
 from pathlib import Path
 from typing import List, Union
 
+import numpy as np
 import pandas as pd
 
 from config import MODAL_CASE_NAME
 from utility_functions import check_ret
+
+_MPMR_HEADERS = [
+    "Mode",
+    "Period(s)",
+    "UX",
+    "UY",
+    "UZ",
+    "RX",
+    "RY",
+    "RZ",
+    "SumUX",
+    "SumUY",
+    "SumUZ",
+    "SumRX",
+    "SumRY",
+    "SumRZ",
+]
+
+_STORY_DRIFT_HEADERS = [
+    "楼层名",
+    "荷载工况/组合",
+    "方向",
+    "类型",
+    "步号",
+    "位移角 (rad)",
+    "位移角 (‰)",
+    "标签",
+    "X",
+    "Y",
+    "Z",
+]
+
+
+def _is_number(s: str) -> bool:
+    """判断字符串是否是一个可以用 float 转换的数字。"""
+    try:
+        float(s)
+        return True
+    except Exception:
+        return False
+
+
+def _merge_candidate(a, b):
+    """
+    根据一行中左右相邻两个单元格的值，判断是否可以合并成一个数字：
+    - '-' + '1.23'  -> '-1.23'
+    - '+' + '0.5'   -> '+0.5'
+    - '12.' + '34'  -> '12.34'
+    - '12' + '.34'  -> '12.34'
+    - '('  + '1234)'-> '-1234'
+    不能合理合并时返回 None。
+    """
+    a = "" if pd.isna(a) else str(a).strip()
+    b = "" if pd.isna(b) else str(b).strip()
+
+    if not a or not b:
+        return None
+
+    # 情况 1：符号 + 数字
+    if re.fullmatch(r"[+-]", a) and _is_number(b):
+        return f"{a}{b}"
+
+    # 情况 2：被拆开的带小数点的数字
+    if _is_number(a + b):
+        a_digits = a.lstrip("+-")
+        b_digits = b.lstrip("+-")
+        # 两边都只是纯数字（例如 '12' | '34'）时，不合并，避免错误变成 1234
+        if not (a_digits.isdigit() and b_digits.isdigit()):
+            return a + b
+
+    # 情况 3：括号表示负数： '(' + '1234)' -> '-1234'
+    if a == "(" and re.fullmatch(r"\d+(\.\d+)?\)", b):
+        return "-" + b[:-1]
+
+    return None
+
+
+def _merge_split_numbers(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    在整张表中扫描横向相邻单元格，尝试把被拆开的数字合并到左侧单元格：
+    合并后：
+      - 左侧单元格写合并后的值（尽量转成 float）
+      - 右侧单元格置为 NaN
+    """
+    df = df.copy()
+    n_rows, n_cols = df.shape
+
+    for r in range(n_rows):
+        for c in range(n_cols - 1):
+            merged_value = _merge_candidate(df.iat[r, c], df.iat[r, c + 1])
+            if merged_value is not None:
+                # 尝试转成 float，不行就保持字符串
+                try:
+                    merged_value = float(merged_value)
+                except Exception:
+                    pass
+
+                df.iat[r, c] = merged_value
+                df.iat[r, c + 1] = np.nan
+
+    return df
+
+
+def _clean_table_basic(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    基础清洗步骤：
+    1. 合并横向被拆开的数字
+    2. 把空字符串替换为 NaN
+    3. 删除全为空的列
+    4. 删除全为空的行
+    """
+    df = _merge_split_numbers(df)
+    df = df.replace("", np.nan)
+    df = df.dropna(axis=1, how="all")
+    df = df.dropna(axis=0, how="all")
+    return df
+
+
+def _fix_label_value_alignment(
+    df: pd.DataFrame,
+    label_cols=None,
+    numeric_cols=None,
+) -> pd.DataFrame:
+    """
+    修正“标注列（构件名 / 工况名等）”与“数值列”的对应关系：
+
+    - label_cols: 标注列的列索引（int 或 list[int]）
+    - numeric_cols: 数值列的列索引（int 或 list[int]）
+
+    处理逻辑：
+    1. 对标注列做前向填充（ffill），解决只在首行写标注、下面几行为空的问题；
+    2. 只保留：
+       - 至少一列数值不为空（numeric_cols 中有非 NaN）
+       - 且标注列不全为空 的行。
+    """
+    df = df.copy()
+
+    if label_cols is None:
+        label_cols = [0]
+    elif isinstance(label_cols, int):
+        label_cols = [label_cols]
+
+    if numeric_cols is None:
+        numeric_cols = [c for c in range(df.shape[1]) if c not in label_cols]
+    elif isinstance(numeric_cols, int):
+        numeric_cols = [numeric_cols]
+
+    # 1. 标注列前向填充
+    df[label_cols] = df[label_cols].ffill()
+
+    # 2. 至少有一个数值不为空
+    if numeric_cols:
+        numeric_mask = df[numeric_cols].notna().any(axis=1)
+    else:
+        numeric_mask = pd.Series(False, index=df.index)
+
+    # 3. 标注不为空
+    label_mask = df[label_cols].notna().any(axis=1)
+
+    df = df[numeric_mask & label_mask]
+
+    return df
+
+
+def _split_fields(line: str) -> List[str]:
+    """Split a line by whitespace and pipe separators, drop empties."""
+    return [p for p in re.split(r"[|\s]+", (line or "").strip()) if p]
+
+
+def _normalize_row(row: List[str], headers: List[str]) -> List[str]:
+    """Pad or trim a row to match header length."""
+    if len(row) < len(headers):
+        row = row + [None] * (len(headers) - len(row))
+    return row[: len(headers)]
+
+
+def create_story_sheet_from_output(workbook) -> None:
+    """
+    从 output 工作表中提取“层间位移角 StoryDrifts”数据块，按固定表头生成新的 Story 工作表：
+    1) 若已有 Story 表则删除重建，表头固定 11 列；
+    2) 查找包含“成功检索到…层间位移角记录”关键行，下一行起连续读取以 Story 开头的行，遇空行或非 Story 终止；
+    3) 每行按空白拆分并截断/补齐到 11 列，原样写入 Story 表，不做数值运算。
+    """
+    if "output" not in workbook.sheetnames:
+        print("未找到 output 工作表，跳过 Story 表生成")
+        return
+
+    # 删除已有的 Story 工作表（若存在），避免旧数据残留
+    if "Story" in workbook.sheetnames:
+        workbook.remove(workbook["Story"])
+
+    output_ws = workbook["output"]
+    story_ws = workbook.create_sheet("Story")
+
+    # 固定表头
+    fixed_headers = [
+        "楼层名",
+        "荷载工况/组合",
+        "方向",
+        "类型",
+        "步号",
+        "位移角 (rad)",
+        "位移角 (‰)",
+        "标签",
+        "X",
+        "Y",
+        "Z",
+    ]
+    story_ws.append(fixed_headers)
+
+    # 1) 定位“成功检索到 … 层间位移角记录”行
+    count_row = None
+    for i, (val,) in enumerate(output_ws.iter_rows(min_col=1, max_col=1, values_only=True), start=1):
+        if val and ("成功检索到" in str(val)) and ("层间位移角记录" in str(val)):
+            count_row = i
+            break
+    if count_row is None:
+        print("未找到“层间位移角记录”标记行，跳过 Story 表生成")
+        return
+
+    # 2) 从 count_row+1 开始读取以 Story 开头的行，直到空行或非 Story
+    story_row = 2  # 写入行号
+    for row_idx in range(count_row + 1, output_ws.max_row + 1):
+        cell_val = output_ws.cell(row=row_idx, column=1).value
+        if cell_val is None or str(cell_val).strip() == "":
+            break
+        text = str(cell_val).strip().strip("'\"")
+        if not text.startswith("Story"):
+            break
+        fields = text.split()
+        if len(fields) < len(fixed_headers):
+            fields += [""] * (len(fixed_headers) - len(fields))
+        if len(fields) > len(fixed_headers):
+            fields = fields[: len(fixed_headers)]
+        for col_idx, val in enumerate(fields, start=1):
+            story_ws.cell(row=story_row, column=col_idx, value=val)
+        story_row += 1
+
+
+def _parse_mpmr_rows(lines: List[str]) -> List[List[str]]:
+    """Extract modal participating mass ratio rows from captured log lines."""
+    rows: List[List[str]] = []
+    for idx, line in enumerate(lines):
+        if "质量参与系数" in line and "显示前" in line:
+            header_idx = None
+            for j in range(idx + 1, len(lines)):
+                if "SumUX" in lines[j]:
+                    header_idx = j
+                    break
+            if header_idx is None:
+                continue
+            data_idx = header_idx + 2  # skip header and dashed line
+            while data_idx < len(lines):
+                data_line = lines[data_idx].strip()
+                if not data_line or data_line.startswith("SumUX") or data_line.startswith("SumUY") or data_line.startswith("SumUZ"):
+                    break
+                if re.match(r"^-{3,}", data_line):
+                    data_idx += 1
+                    continue
+                if not re.match(r"^\d+", data_line):
+                    break
+                rows.append(_normalize_row(_split_fields(data_line), _MPMR_HEADERS))
+                data_idx += 1
+            break
+    return rows
+
+
+def _parse_story_drift_rows(lines: List[str]) -> List[List[str]]:
+    """Extract story drift rows from captured log lines."""
+    rows: List[List[str]] = []
+    stop_tokens = ["X方向最大位移角", "Y方向最大位移角", "层间位移角提取完毕"]
+    for idx, line in enumerate(lines):
+        if "层间位移角记录" in line:
+            data_idx = idx + 1
+            while data_idx < len(lines):
+                data_line = lines[data_idx].strip()
+                if any(token in data_line for token in stop_tokens):
+                    break
+                if data_line.startswith("Story"):
+                    parts = data_line.split()
+                    if len(parts) >= 11:
+                        try:
+                            story, case_combo, direction, stype = parts[0], parts[1], parts[2], parts[3]
+                            drift = float(parts[4])
+                            drift_ratio = float(parts[5])
+                            drift_angle = float(parts[6])
+                            index = int(parts[7])
+                            top_z = float(parts[8])
+                            bottom_z = float(parts[9])
+                            story_elev = float(parts[10])
+                        except Exception:
+                            data_idx += 1
+                            continue
+                        rows.append(
+                            [
+                                story,
+                                case_combo,
+                                direction,
+                                stype,
+                                drift,
+                                drift_ratio,
+                                drift_angle,
+                                index,
+                                top_z,
+                                bottom_z,
+                                story_elev,
+                            ]
+                        )
+                data_idx += 1
+            break
+    return rows
 
 
 @contextmanager
@@ -578,17 +891,35 @@ def extract_modal_and_drift(sap_model, output_dir: Union[str, Path]) -> Path:
     # 回显到终端
     print(text, end="")
 
-    # 写入 Excel（仅保留关键信息行）
+    # 写入 Excel
     lines = text.splitlines()
-    filtered_lines = [ln for ln in lines if _is_important_line(ln)]
-    df = pd.DataFrame({"output": filtered_lines})
+    mpmr_rows = _parse_mpmr_rows(lines)
+    story_rows = _parse_story_drift_rows(lines)
+
     summary_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_excel(summary_path, index=False)
+    filtered_lines = [ln for ln in lines if _is_important_line(ln)]
+
+    with pd.ExcelWriter(summary_path, engine="openpyxl") as writer:
+        if mpmr_rows:
+            pd.DataFrame(mpmr_rows, columns=_MPMR_HEADERS).to_excel(
+                writer, index=False, sheet_name="Mode"
+            )
+        # 保留原始关键信息行（原始输出表），避免覆盖/删除原始数据
+        pd.DataFrame({"output": filtered_lines}).to_excel(
+            writer, index=False, sheet_name="output"
+        )
+        # 基于 output 表的 StoryDrifts 文本再生成一次 Story 表，确保从原始文本提取
+        create_story_sheet_from_output(writer.book)
 
     return summary_path
 
 
 __all__ = [
+    "_is_number",
+    "_merge_candidate",
+    "_merge_split_numbers",
+    "_clean_table_basic",
+    "_fix_label_value_alignment",
     "capture_stdout_to_buffer",
     "_is_important_line",
     "extract_modal_and_mass_info",
