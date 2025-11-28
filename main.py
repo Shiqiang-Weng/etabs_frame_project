@@ -45,16 +45,16 @@ perform_concrete_design_and_extract_results, design_module_available = _import_o
     ['design_module'], 'perform_concrete_design_and_extract_results'
 )
 
-# 设计内力提取改为固定入口（优先 results_extraction 包，兼容旧模块名）
+# 设计内力提取改为固定入口（仅 results_extraction 包）
+design_force_extraction_available = False
+extract_design_forces_and_summary = None
+
 try:
     from results_extraction.design_forces import extract_design_forces_and_summary
     design_force_extraction_available = True
     print("✅模块 'results_extraction.design_forces' 导入成功。")
-except Exception:
-    extract_design_forces_and_summary, design_force_extraction_available = _import_optional_module(
-        ['design_force_extraction', 'design_force_extraction_fixed', 'design_force_extraction_improved'],
-        'extract_design_forces_and_summary'
-    )
+except Exception as exc:
+    print(f"⚠️ 设计内力提取模块导入失败: {exc}")
 
 
 def print_project_info():

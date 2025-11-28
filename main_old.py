@@ -45,27 +45,10 @@ try:
     design_force_extraction_available = True
     print("✅设计内力提取模块导入成功: results_extraction.design_forces")
 except Exception as primary_error:
-    print(f"⚠️ 首选设计内力提取模块导入失败: {primary_error}")
-
-    possible_modules = [
-        'design_force_extraction',
-        'design_force_extraction_fixed',
-        'design_force_extraction_improved',
-    ]
-
-    for module_name in possible_modules:
-        try:
-            module = __import__(module_name, fromlist=['extract_design_forces_and_summary'])
-            extract_design_forces_and_summary = getattr(module, 'extract_design_forces_and_summary')
-            design_force_extraction_available = True
-            print(f"✅设计内力提取模块导入成功: {module_name}")
-            break
-        except ImportError as e:
-            print(f"⚠️ 尝试导入 {module_name} 失败: {e}")
-            continue
+    print(f"⚠️ 设计内力提取模块导入失败: {primary_error}")
 
 if not design_force_extraction_available:
-    print("⚠️ 所有设计内力提取模块导入失败，将跳过设计内力提取功能。")
+    print("⚠️ 设计内力提取模块导入失败，将跳过设计内力提取功能。")
 
     def extract_design_forces_and_summary(column_names, beam_names):
         print("⏭️ 设计内力提取模块导入失败，跳过设计内力提取。")
