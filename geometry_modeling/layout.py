@@ -7,16 +7,7 @@ Grid and story layout definitions for geometry modeling.
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Tuple
 
-from config import (
-    NUM_GRID_LINES_X,
-    NUM_GRID_LINES_Y,
-    SPACING_X,
-    SPACING_Y,
-    NUM_STORIES,
-    TYPICAL_STORY_HEIGHT,
-    BOTTOM_STORY_HEIGHT,
-    FRAME_BEAM_HEIGHT,
-)
+from common.config import SETTINGS
 
 
 @dataclass(frozen=True)
@@ -85,11 +76,19 @@ class StoryConfig:
 
 
 def default_grid_config() -> GridConfig:
-    return GridConfig(NUM_GRID_LINES_X, NUM_GRID_LINES_Y, SPACING_X, SPACING_Y)
+    cfg = SETTINGS.grid
+    return GridConfig(cfg.num_grid_lines_x, cfg.num_grid_lines_y, cfg.spacing_x, cfg.spacing_y)
 
 
 def default_story_config() -> StoryConfig:
-    return StoryConfig(NUM_STORIES, TYPICAL_STORY_HEIGHT, BOTTOM_STORY_HEIGHT, FRAME_BEAM_HEIGHT)
+    grid_cfg = SETTINGS.grid
+    sec_cfg = SETTINGS.sections
+    return StoryConfig(
+        grid_cfg.num_stories,
+        grid_cfg.typical_story_height,
+        grid_cfg.bottom_story_height,
+        sec_cfg.frame_beam_height,
+    )
 
 
 __all__ = ["GridConfig", "StoryConfig", "default_grid_config", "default_story_config"]

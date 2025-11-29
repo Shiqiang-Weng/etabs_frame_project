@@ -1,171 +1,132 @@
-﻿# main.py
+﻿#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Canonical ETABS frame pipeline runner with four stages:
+1) 几何建模 (geometry_modeling)
+2) 荷载定义与施加 (load_module)
+3) 分析 / 设计求解 (analysis)
+4) 结果提取 / 后处理 (results_extraction)
+"""
+
 import sys
 import time
 import traceback
-import os
 from pathlib import Path
 
-# 瀵煎叆閰嶇疆鍜屾牳蹇冩ā鍧?
-from config import *
-from etabs_api_loader import load_dotnet_etabs_api
-from etabs_setup import setup_etabs
-from materials_sections import define_all_materials_and_sections
-from load_module import (
-    assign_loads_to_model,
-    define_load_cases,
-    setup_response_spectrum,
-)
-from frame_geometry import create_frame_structure
-from analysis import wait_and_run_analysis, check_analysis_completion
-from file_operations import finalize_and_save_model, cleanup_etabs_on_error, check_output_directory
-from results_extraction.member_forces import extract_and_save_frame_forces
-from results_extraction.analysis_results_module import extract_modal_and_drift
-from results_extraction.core_results_module import export_core_results
+from common import config
+from common.etabs_api_loader import load_dotnet_etabs_api
+from common import etabs_setup, file_operations
+
+import geometry_modeling
+import load_module
+import analysis
+import results_extraction
 
 
-# --- 可选模块动态导入 ---
-def _import_optional_module(module_names, function_name):
-    """尝试从多个可能的模块名中导入一个函数。返回 (函数对象, 是否成功)。"""
-    for module_name in module_names:
-        try:
-            module = __import__(module_name, fromlist=[function_name])
-            func = getattr(module, function_name)
-            print(f"[可选模块] {module_name!r} 导入成功")
-            return func, True
-        except ImportError:
-            print(f"[可选模块] 未找到模块 {module_name!r}，尝试下一个...")
-            continue
-    print("[可选模块] 所有候选模块({})均导入失败".format(", ".join(module_names)))
-    return None, False
-
-
-# 动态导入设计模块及设计内力提取模块
-perform_concrete_design_and_extract_results, design_module_available = _import_optional_module(
-    ['design_module'], 'perform_concrete_design_and_extract_results'
-)
-design_force_extraction_available = False
-extract_design_forces_and_summary = None
-
-try:
-    from results_extraction.design_forces import extract_design_forces_and_summary
-    design_force_extraction_available = True
-    print("[可选模块] 'results_extraction.design_forces' 导入成功")
-except Exception as exc:
-    print(f"[可选模块] 设计内力提取模块导入失败: {exc}")
-
-def print_project_info():
+def print_project_info() -> None:
     """打印项目和脚本配置信息"""
+    total_height = config.BOTTOM_STORY_HEIGHT + (config.NUM_STORIES - 1) * config.TYPICAL_STORY_HEIGHT
     print("=" * 80)
-    print("ETABS 框架结构自动建模脚本 v7.0 (优化版)")
+    print("ETABS 框架结构自动建模脚本 (规范四阶段流水线)")
     print("=" * 80)
-    print("模块状态:")
-    print(f"- 设计模块: {'可用' if design_module_available else '不可用'}")
-    print(f"- 设计内力提取模块: {'可用' if design_force_extraction_available else '不可用'}")
-    print("\n关键参数:")
-    print(f"- 楼层数 {NUM_STORIES}, 总高: {BOTTOM_STORY_HEIGHT + (NUM_STORIES - 1) * TYPICAL_STORY_HEIGHT:.1f}m")
-    print(f"- 执行设计: {'是' if PERFORM_CONCRETE_DESIGN else '否'}")
-    print(f"- 提取设计内力: {'是' if PERFORM_CONCRETE_DESIGN and design_force_extraction_available else '否'}")
+    print("关键参数:")
+    print(f"- 楼层数 {config.NUM_STORIES}, 总高: {total_height:.1f} m")
+    print(f"- 执行设计: {'是' if config.PERFORM_CONCRETE_DESIGN else '否'}")
+    print(f"- 提取设计内力: {'是' if config.PERFORM_CONCRETE_DESIGN and config.EXPORT_ALL_DESIGN_FILES else '否'}")
     print("=" * 80)
 
 
-def run_setup_and_initialization():
-    """阶段一：系统初始化和 ETABS 连接"""
-    print("\n[阶段一] 系统初始化")
-    if not check_output_directory():
+def stage_setup_and_init():
+    """阶段 0：输出目录检查 + API 加载 + 连接 ETABS"""
+    print("\n[阶段0] 系统初始化与 ETABS 连接")
+    if not file_operations.check_output_directory():
         sys.exit("输出目录检查失败，脚本终止")
     load_dotnet_etabs_api()
-    _, sap_model = setup_etabs()
+    _, sap_model = etabs_setup.setup_etabs()
     return sap_model
 
 
-def run_model_definition(sap_model):
-    """阶段二：定义材料、截面及荷载工况"""
-    print("\n[阶段二] 模型定义：材料、截面、荷载工况")
-    define_all_materials_and_sections()
-    setup_response_spectrum()
-    define_load_cases()
+def stage_geometry(sap_model):
+    """阶段 1：几何建模（含材料/截面定义）"""
+    print("\n[阶段1] 几何建模")
+    geometry_modeling.define_all_materials_and_sections()
+    column_names, beam_names, slab_names, _ = geometry_modeling.create_frame_structure()
+    return column_names, beam_names, slab_names
 
 
-def run_geometry_and_loading(sap_model):
-    """阶段三和四：几何建模与荷载分配"""
-    print("\n[阶段三] 几何建模")
-    column_names, beam_names, slab_names, _ = create_frame_structure()
-    print("\n[阶段四] 施加荷载(load_module)")
-    assign_loads_to_model(column_names, beam_names, slab_names)
-    finalize_and_save_model()
-    return column_names, beam_names
+def stage_loads(column_names, beam_names, slab_names):
+    """阶段 2：荷载定义与施加"""
+    print("\n[阶段2] 荷载定义与施加")
+    load_module.setup_response_spectrum()
+    load_module.define_all_load_cases()
+    load_module.assign_all_loads_to_frame_structure(column_names, beam_names, slab_names)
+    file_operations.finalize_and_save_model()
 
-def run_analysis_and_results_extraction(sap_model, frame_element_names):
-    """阶段五和六：结构分析与结果提取"""
-    print("\n[阶段五/六] 结构分析(analysis) 与结果提取(results_extraction)")
-    wait_and_run_analysis(5)
-    if not check_analysis_completion():
+
+def stage_analysis(sap_model):
+    """阶段 3：结构分析"""
+    print("\n[阶段3] 结构分析")
+    analysis.wait_and_run_analysis(5)
+    if not analysis.check_analysis_completion():
         print("[提醒] 分析状态检查异常，但继续尝试提取结果")
-    dynamic_summary_path = extract_modal_and_drift(sap_model, SCRIPT_DIRECTORY)
-    print(f"动态分析结果概要已写入 Excel: {dynamic_summary_path}")
-    extract_and_save_frame_forces(frame_element_names)
 
 
-def run_design_and_force_extraction(workflow_state, sap_model, column_names, beam_names):
-    """阶段八和九：构件设计与设计内力提取"""
-    if not PERFORM_CONCRETE_DESIGN:
-        print("\n[跳过] 阶段八&九：根据配置跳过构件设计和内力提取")
+def stage_results(sap_model, frame_element_names, output_dir: Path, workflow_state):
+    """阶段 4：结果提取 / 后处理"""
+    print("\n[阶段4] 结果提取与报表")
+    summary_path = results_extraction.extract_modal_and_drift(sap_model, output_dir)
+    print(f"动态分析结果概要已写入 Excel: {summary_path}")
+    results_extraction.extract_and_save_frame_forces(frame_element_names)
+    workflow_state["analysis_completed"] = True
+    return summary_path
+
+
+def stage_design_and_forces(sap_model, column_names, beam_names, output_dir: Path, workflow_state):
+    """阶段 5：构件设计 + 设计内力提取（按配置可选）"""
+    if not config.PERFORM_CONCRETE_DESIGN:
+        print("\n[阶段5] 跳过构件设计与设计内力提取（配置关闭）")
         return
 
-    # --- 阶段八：构件设计 ---
-    print("\n[阶段八] 混凝土构件配筋设计")
-    if not design_module_available:
-        print("[错误] 设计模块不可用，无法执行设计")
-        return
-
+    print("\n[阶段5] 混凝土构件设计与设计结果提取")
     try:
-        if perform_concrete_design_and_extract_results():
+        design_ok = analysis.perform_concrete_design_and_extract_results()
+        workflow_state["design_completed"] = bool(design_ok)
+        if design_ok:
             print("[完成] 设计和结果提取验证通过")
-            workflow_state['design_completed'] = True
         else:
-            print("[警告] 设计和结果提取失败，请检查 design_module 日志")
-    except Exception as e:
-        print(f"[错误] 构件设计模块发生严重错误: {e}")
+            print("[警告] 设计和结果提取失败，请检查日志")
+    except Exception as exc:  # noqa: BLE001
+        workflow_state["design_completed"] = False
+        print(f"[错误] 构件设计模块发生严重错误: {exc}")
         traceback.print_exc()
+        return
 
-    # --- 阶段九：设计内力提取 ---
-    print("\n[阶段九] 构件设计内力提取")
-    if not workflow_state['design_completed']:
+    if not workflow_state["design_completed"]:
         print("因设计阶段未成功，跳过设计内力提取")
         return
 
-    core_files = export_core_results(sap_model, SCRIPT_DIRECTORY)
-    expected_core_keys = {
-        "analysis_dynamic_summary",
-        "beam_flexure_envelope",
-        "beam_shear_envelope",
-        "column_pmm_design_forces_raw",
-        "column_shear_envelope",
-    }
+    core_files = results_extraction.export_core_results(sap_model, output_dir)
     if core_files:
         print("\n核心结果文件:")
         for name, path in core_files.items():
             print(f"  - {name}: {path}")
     missing_keys = {name for name, path in core_files.items() if not Path(path).exists()}
-    workflow_state['force_extraction_completed'] = not missing_keys
+    workflow_state["force_extraction_completed"] = not missing_keys
     if missing_keys:
         print(f"[警告] 核心结果缺少: {sorted(missing_keys)}")
 
-    if not EXPORT_ALL_DESIGN_FILES:
+    if not config.EXPORT_ALL_DESIGN_FILES:
         print("已生成核心结果文件，跳过全量设计 CSV 导出")
-        return
-    if not design_force_extraction_available:
-        print("设计内力提取模块不可用，跳过")
         return
 
     try:
-        if extract_design_forces_and_summary(column_names, beam_names):
+        if results_extraction.extract_design_forces_and_summary(column_names, beam_names):
+            workflow_state["force_extraction_completed"] = True
             print("构件设计内力提取成功（全量导出）")
-            workflow_state['force_extraction_completed'] = True
         else:
             print("构件设计内力提取失败，请检查日志")
-    except Exception as e:
-        print(f"设计内力提取模块发生严重错误: {e}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"设计内力提取模块发生严重错误: {exc}")
         traceback.print_exc()
 
 
@@ -176,17 +137,14 @@ def generate_final_report(start_time, workflow_state):
     print("框架结构建模与分析流程完成")
     print(f"总执行时间 {elapsed_time:.2f} 秒")
     print("=" * 80)
-    print("执行状态总结:")
     status_map = {True: "成功", False: "失败", None: "跳过"}
-    print(f"   - 结构建模与分析: {status_map[True]}")
-    if PERFORM_CONCRETE_DESIGN:
-        design_status = status_map[workflow_state["design_completed"]] if design_module_available else "跳过 (模块不可用)"
+    print("执行状态总结:")
+    print(f"   - 结构建模与分析: {status_map[workflow_state.get('analysis_completed', False)]}")
+    if config.PERFORM_CONCRETE_DESIGN:
+        design_status = status_map[workflow_state.get('design_completed', False)]
         print(f"   - 构件设计: {design_status}")
-        if workflow_state["design_completed"]:
-            if design_force_extraction_available:
-                force_status = status_map[workflow_state["force_extraction_completed"]]
-            else:
-                force_status = "跳过 (模块不可用)"
+        if workflow_state.get("design_completed"):
+            force_status = status_map[workflow_state.get('force_extraction_completed', False)]
         else:
             force_status = "跳过 (设计未成功)"
         print(f"   - 设计内力提取: {force_status}")
@@ -194,7 +152,7 @@ def generate_final_report(start_time, workflow_state):
         print(f"   - 构件设计: {status_map[None]}")
         print(f"   - 设计内力提取: {status_map[None]}")
     print("\n主要输出文件位于脚本目录:")
-    print(f"   - 模型文件: {MODEL_PATH}")
+    print(f"   - 模型文件: {config.MODEL_PATH}")
     print("   - 分析内力: frame_member_forces.csv")
     if workflow_state.get("design_completed"):
         print("   - 配筋结果: concrete_design_results.csv")
@@ -205,39 +163,43 @@ def generate_final_report(start_time, workflow_state):
         print("   - 梁剪力包络: beam_shear_envelope.csv")
         print("   - 柱P-M-M 原始: column_pmm_design_forces_raw.csv")
         print("   - 柱剪力包络: column_shear_envelope.csv")
-        if EXPORT_ALL_DESIGN_FILES:
+        if config.EXPORT_ALL_DESIGN_FILES:
             print("   - 其他设计输出：已启用全量导出，请查看目录。")
     print("=" * 80)
 
-def main():
-    """主函数：协调所有建模、分析和设计流程"""
+
+def run_pipeline():
+    """Run the full four-stage pipeline."""
     script_start_time = time.time()
     workflow_state = {
+        "analysis_completed": False,
         "design_completed": False,
         "force_extraction_completed": False,
     }
 
     try:
         print_project_info()
-        sap_model = run_setup_and_initialization()
-        run_model_definition(sap_model)
-        column_names, beam_names = run_geometry_and_loading(sap_model)
-        run_analysis_and_results_extraction(sap_model, column_names + beam_names)
-        run_design_and_force_extraction(workflow_state, sap_model, column_names, beam_names)
-    except SystemExit as e:
+        sap_model = stage_setup_and_init()
+        column_names, beam_names, slab_names = stage_geometry(sap_model)
+        stage_loads(column_names, beam_names, slab_names)
+        stage_analysis(sap_model)
+        stage_results(sap_model, column_names + beam_names, Path(config.SCRIPT_DIRECTORY), workflow_state)
+        stage_design_and_forces(sap_model, column_names, beam_names, Path(config.SCRIPT_DIRECTORY), workflow_state)
+    except SystemExit as exc:
         print("\n--- 脚本已结束 ---")
-        if e.code != 0:
-            print(f"退出代码 {e.code}")
-    except Exception as e:
+        if exc.code != 0:
+            print(f"退出代码 {exc.code}")
+    except Exception as exc:  # noqa: BLE001
         print("\n--- 未预料的运行时错误 ---")
-        print(f"错误类型: {type(e).__name__}: {e}")
+        print(f"错误类型: {type(exc).__name__}: {exc}")
         traceback.print_exc()
-        cleanup_etabs_on_error()
+        file_operations.cleanup_etabs_on_error()
         sys.exit(1)
     finally:
         generate_final_report(script_start_time, workflow_state)
-        if not ATTACH_TO_INSTANCE:
+        if not config.ATTACH_TO_INSTANCE:
             print("脚本执行完毕，ETABS 将保持打开状态。")
 
+
 if __name__ == "__main__":
-    main()
+    run_pipeline()

@@ -4,7 +4,8 @@
 Compatibility wrapper for geometry modeling.
 
 All implementation lives in geometry_modeling/* to keep a clear package structure.
-Existing imports of frame_geometry remain valid.
+Existing imports of frame_geometry remain valid, but new code should import from
+the geometry_modeling package directly.
 """
 
 from geometry_modeling import (

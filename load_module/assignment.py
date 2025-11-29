@@ -6,20 +6,20 @@
 """
 
 from typing import List
-from etabs_setup import get_etabs_objects
-from utility_functions import check_ret
-from config import (
-    DEFAULT_DEAD_SUPER_SLAB, DEFAULT_LIVE_LOAD_SLAB, DEFAULT_FINISH_LOAD_BEAM
-)
+from common.etabs_setup import get_etabs_objects
+from common.utility_functions import check_ret
+from common.config import SETTINGS
 
 # 柱轴向荷载参数（kN，压缩为正）
 COLUMN_AXIAL_LOAD = 0  # 每根柱的轴向荷载
 ENABLE_FRAME_COLUMNS = True  # 是否启用柱荷载
 
 
-def assign_dead_and_live_loads_to_slabs(slab_names: List[str],
-                                        dead_kpa: float = DEFAULT_DEAD_SUPER_SLAB,
-                                        live_kpa: float = DEFAULT_LIVE_LOAD_SLAB):
+def assign_dead_and_live_loads_to_slabs(
+    slab_names: List[str],
+    dead_kpa: float = SETTINGS.loads.default_dead_super_slab,
+    live_kpa: float = SETTINGS.loads.default_live_load_slab,
+):
     """
     为楼板分配恒荷载和活荷载
 
@@ -82,8 +82,10 @@ def assign_dead_and_live_loads_to_slabs(slab_names: List[str],
     print(f"楼板荷载分配完成: 成功 {success_count} 块, 失败 {fail_count} 块")
 
 
-def assign_finish_loads_to_beams(beam_names: List[str],
-                                 finish_load: float = DEFAULT_FINISH_LOAD_BEAM):
+def assign_finish_loads_to_beams(
+    beam_names: List[str],
+    finish_load: float = SETTINGS.loads.default_finish_load_beam,
+):
     """
     为框架梁分配面层荷载（线荷载）
 

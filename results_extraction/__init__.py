@@ -1,7 +1,7 @@
 ﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Results extraction package facade.
+结果提取/后处理阶段的规范入口。
 Provides unified interfaces for analysis results, design forces, member forces,
 and enhanced design result extraction.
 """
@@ -31,8 +31,13 @@ from .member_forces import (
     extract_frame_forces,
     save_forces_to_csv,
 )
-from config import SCRIPT_DIRECTORY
-from etabs_setup import get_etabs_objects
+from common.config import SCRIPT_DIRECTORY
+from common.etabs_setup import get_etabs_objects
+from .concrete_frame_detail_data import (
+    extract_all_concrete_design_data,
+    generate_comprehensive_summary_report,
+)
+from .section_diagnostic import complete_design_workflow as run_section_diagnostics
 
 
 def extract_modal_and_mass_info() -> None:
@@ -80,4 +85,8 @@ __all__ = [
     "generate_enhanced_summary_report",
     "extract_and_save_beam_results",
     "extract_and_save_column_results",
+    # diagnostics/reporting
+    "extract_all_concrete_design_data",
+    "generate_comprehensive_summary_report",
+    "run_section_diagnostics",
 ]

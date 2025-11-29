@@ -11,9 +11,9 @@ import sys
 import time
 from typing import Sequence
 
-from config import ATTACH_TO_INSTANCE, MODEL_PATH, MODAL_CASE_NAME
-from etabs_setup import get_etabs_objects
-from utility_functions import check_ret
+from common.config import ATTACH_TO_INSTANCE, MODEL_PATH, MODAL_CASE_NAME
+from common.etabs_setup import get_etabs_objects
+from common.utility_functions import check_ret
 
 # 固定分析工况顺序
 DEFAULT_LOAD_CASES = ("DEAD", "LIVE", MODAL_CASE_NAME, "RS-X", "RS-Y")
@@ -36,7 +36,7 @@ def safe_run_analysis(load_cases_to_run: Sequence[str], delete_old_results: bool
     if sap_model is None:
         raise RuntimeError("SapModel 未初始化，无法运行分析。")
 
-    from etabs_api_loader import get_api_objects  # 动态导入以避免循环依赖
+    from common.etabs_api_loader import get_api_objects  # 动态导入以避免循环依赖
 
     _, System, _ = get_api_objects()
     if System is None:

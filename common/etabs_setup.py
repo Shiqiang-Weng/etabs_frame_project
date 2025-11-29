@@ -93,8 +93,75 @@ def get_etabs_objects():
     return my_etabs, sap_model
 
 
+def get_sap_model():
+    """
+    获取SAP模型对象
+    这是设计内力提取模块需要的函数
+
+    Returns:
+        sap_model: ETABS SAP模型对象，如果未初始化则返回None
+    """
+    global sap_model
+    if sap_model is None:
+        print("⚠️ SAP模型对象未初始化，请先运行 setup_etabs()")
+        return None
+    return sap_model
+
+
+def set_sap_model(model):
+    """
+    设置SAP模型对象
+
+    Args:
+        model: ETABS SAP模型对象
+    """
+    global sap_model
+    sap_model = model
+
+
+def is_etabs_connected():
+    """
+    检查ETABS连接状态
+
+    Returns:
+        bool: True如果已连接，False如果未连接
+    """
+    global my_etabs, sap_model
+    try:
+        if my_etabs is None or sap_model is None:
+            return False
+        # 尝试执行一个简单的操作来测试连接
+        _ = sap_model.GetModelFilename()
+        return True
+    except:
+        return False
+
+
+def ensure_etabs_ready():
+    """
+    确保ETABS已准备就绪，如果未连接则尝试重新连接
+
+    Returns:
+        bool: True如果ETABS已准备就绪，False如果失败
+    """
+    if is_etabs_connected():
+        return True
+
+    print("🔄 ETABS连接丢失，尝试重新连接...")
+    try:
+        setup_etabs()
+        return is_etabs_connected()
+    except Exception as e:
+        print(f"❌ 重新连接ETABS失败: {e}")
+        return False
+
+
 # 导出函数列表
 __all__ = [
     'setup_etabs',
-    'get_etabs_objects'
+    'get_etabs_objects',
+    'get_sap_model',  # 新增
+    'set_sap_model',  # 新增
+    'is_etabs_connected',  # 新增
+    'ensure_etabs_ready'  # 新增
 ]

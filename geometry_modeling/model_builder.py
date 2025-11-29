@@ -7,13 +7,13 @@ Geometry modeling workflow for ETABS frame structures.
 import logging
 from typing import Dict, List, Tuple
 
-from config import (
+from common.config import (
     FRAME_BEAM_SECTION_NAME,
     FRAME_COLUMN_SECTION_NAME,
     SLAB_SECTION_NAME,
 )
-from etabs_setup import get_etabs_objects
-from utility_functions import add_area_by_coord_custom, add_frame_by_coord_custom, check_ret
+from common.etabs_setup import get_etabs_objects
+from common.utility_functions import add_area_by_coord_custom, add_frame_by_coord_custom, check_ret
 
 from .api_compat import _require_sap_model, ensure_model_units
 from .base_constraints import (

@@ -18,8 +18,8 @@ from typing import List, Union
 import numpy as np
 import pandas as pd
 
-from config import MODAL_CASE_NAME
-from utility_functions import check_ret
+from common.config import MODAL_CASE_NAME
+from common.utility_functions import check_ret
 
 _MPMR_HEADERS = [
     "Mode",

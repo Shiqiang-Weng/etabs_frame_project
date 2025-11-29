@@ -1,4 +1,5 @@
 """
+荷载定义与施加阶段的规范入口。
 Unified entry point for load definition, assignment, and response spectrum setup.
 Expose clear APIs for the main workflow while keeping original helpers available.
 """

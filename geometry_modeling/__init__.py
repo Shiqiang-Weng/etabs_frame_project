@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Geometry modeling package for ETABS frame structures.
-Exposes the same public APIs as the legacy frame_geometry module for compatibility.
+几何建模阶段的规范入口。Provides geometry modeling APIs for ETABS frame structures.
+Exports legacy-compatible symbols while pointing new code to the package namespace.
 """
 
 from .api_compat import (
@@ -27,6 +27,13 @@ from .base_constraints import (
     set_rigid_base_constraints_fixed,
     set_rigid_base_constraints_improved,
 )
+from .materials_sections import (
+    define_all_materials_and_sections,
+    define_diaphragms,
+    define_frame_sections,
+    define_materials,
+    define_slab_sections,
+)
 from .layout import GridConfig, StoryConfig, default_grid_config, default_story_config
 from .model_builder import (
     ElementCreator,
@@ -41,6 +48,11 @@ __all__ = [
     "ensure_model_units",
     "debug_joint_coordinates",
     "get_all_points_reference_method",
+    "define_materials",
+    "define_frame_sections",
+    "define_slab_sections",
+    "define_diaphragms",
+    "define_all_materials_and_sections",
     "get_base_level_joints",
     "get_base_level_joints_v2",
     "get_base_level_joints_by_grid",

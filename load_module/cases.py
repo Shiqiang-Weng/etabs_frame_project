@@ -5,12 +5,9 @@
 定义静力荷载工况、模态分析工况、反应谱工况等
 """
 
-from etabs_setup import get_etabs_objects
-from utility_functions import check_ret, arr
-from config import (
-    MODAL_CASE_NAME, RS_FUNCTION_NAME, GRAVITY_ACCEL, RS_DAMPING_RATIO,
-    GENERATE_RS_COMBOS
-)
+from common.etabs_setup import get_etabs_objects
+from common.utility_functions import check_ret, arr
+from common.config import SETTINGS
 
 
 def ensure_dead_pattern():
@@ -84,7 +81,7 @@ def define_modal_case():
     from etabs_api_loader import get_api_objects
     ETABSv1, System, COMException = get_api_objects()
 
-    print(f"\n定义模态分析工况 '{MODAL_CASE_NAME}'...")
+    print(f"\n定义模态分析工况 '{SETTINGS.response_spectrum.modal_case_name}'...")
     lc = sap_model.LoadCases
     mod_api = lc.ModalEigen
 
@@ -95,20 +92,20 @@ def define_modal_case():
     check_ret(ret_tuple[0], "GetNameList(Modal)")
     existing_modals = list(ret_tuple[2]) if ret_tuple[1] > 0 and ret_tuple[2] is not None else []
 
-    if MODAL_CASE_NAME not in existing_modals:
-        check_ret(mod_api.SetCase(MODAL_CASE_NAME), f"ModalEigen.SetCase({MODAL_CASE_NAME})")
+    if SETTINGS.response_spectrum.modal_case_name not in existing_modals:
+        check_ret(mod_api.SetCase(SETTINGS.response_spectrum.modal_case_name), f"ModalEigen.SetCase({SETTINGS.response_spectrum.modal_case_name})")
 
     # 设置特征值求解器
     if hasattr(mod_api, "SetEigenSolver"):
-        check_ret(mod_api.SetEigenSolver(MODAL_CASE_NAME, 0), f"SetEigenSolver({MODAL_CASE_NAME})")
+        check_ret(mod_api.SetEigenSolver(SETTINGS.response_spectrum.modal_case_name, 0), f"SetEigenSolver({SETTINGS.response_spectrum.modal_case_name})")
     elif hasattr(mod_api, "SetModalSolverOption"):  # 旧版API
-        check_ret(mod_api.SetModalSolverOption(MODAL_CASE_NAME, 0), f"SetModalSolverOption({MODAL_CASE_NAME})")
+        check_ret(mod_api.SetModalSolverOption(SETTINGS.response_spectrum.modal_case_name, 0), f"SetModalSolverOption({SETTINGS.response_spectrum.modal_case_name})")
 
     # 设置模态数量
-    check_ret(mod_api.SetNumberModes(MODAL_CASE_NAME, 60, 1),
-              f"SetNumberModes({MODAL_CASE_NAME})", (0, 1))
+    check_ret(mod_api.SetNumberModes(SETTINGS.response_spectrum.modal_case_name, 60, 1),
+              f"SetNumberModes({SETTINGS.response_spectrum.modal_case_name})", (0, 1))
 
-    print(f"模态分析工况 '{MODAL_CASE_NAME}' 定义完成（60个模态）")
+    print(f"模态分析工况 '{SETTINGS.response_spectrum.modal_case_name}' 定义完成（60个模态）")
 
 
 def define_response_spectrum_cases():
@@ -134,19 +131,19 @@ def define_response_spectrum_cases():
         # 设置荷载
         check_ret(
             rs_api.SetLoads(case_name, 1, arr([u_dir_code], System.String),
-                            arr([RS_FUNCTION_NAME], System.String),
-                            arr([GRAVITY_ACCEL]), arr(["Global"], System.String),
+                            arr([SETTINGS.response_spectrum.rs_function_name], System.String),
+                            arr([SETTINGS.response_spectrum.gravity_accel]), arr(["Global"], System.String),
                             arr([0.0])),
             f"RS.SetLoads({case_name})"
         )
 
         # 设置模态工况
-        check_ret(rs_api.SetModalCase(case_name, MODAL_CASE_NAME),
+        check_ret(rs_api.SetModalCase(case_name, SETTINGS.response_spectrum.modal_case_name),
                   f"RS.SetModalCase({case_name})")
 
         # 设置模态组合方法（CQC）
         if hasattr(rs_api, "SetModalComb"):
-            check_ret(rs_api.SetModalComb(case_name, 0, 0.0, RS_DAMPING_RATIO, 0),
+            check_ret(rs_api.SetModalComb(case_name, 0, 0.0, SETTINGS.response_spectrum.rs_damping_ratio, 0),
                       f"RS.SetModalComb({case_name})")
 
         # 设置缺失质量
@@ -168,7 +165,7 @@ def define_response_spectrum_cases():
 def define_response_spectrum_combinations(rs_cases_created):
     """定义反应谱组合"""
     my_etabs, sap_model = get_etabs_objects()
-    if sap_model is None or not GENERATE_RS_COMBOS or len(rs_cases_created) != 2:
+    if sap_model is None or not SETTINGS.response_spectrum.generate_rs_combos or len(rs_cases_created) != 2:
         return
 
     # 动态导入API对象

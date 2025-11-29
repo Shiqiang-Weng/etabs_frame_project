@@ -1,10 +1,7 @@
-﻿#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+﻿"""
+Legacy shim – concrete design workflow now lives in analysis.design_workflow.
 """
-Compatibility proxy for legacy design entry.
-Actual implementation lives in results_extraction.design_workflow.
-"""
-
-from results_extraction.design_workflow import perform_concrete_design_and_extract_results
+from analysis.design_workflow import perform_concrete_design_and_extract_results  # noqa: F401
 
 __all__ = ["perform_concrete_design_and_extract_results"]
+
