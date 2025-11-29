@@ -199,6 +199,8 @@ def run_pipeline():
         generate_final_report(script_start_time, workflow_state)
         if not config.ATTACH_TO_INSTANCE:
             print("脚本执行完毕，ETABS 将保持打开状态。")
+        # 清理 __pycache__ 目录，保持目录整洁
+        file_operations.remove_pycache()
 
 
 if __name__ == "__main__":

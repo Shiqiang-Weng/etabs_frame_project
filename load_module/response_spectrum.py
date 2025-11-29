@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 反应谱定义模块
@@ -6,9 +6,9 @@
 """
 
 import sys
-from etabs_setup import get_etabs_objects
-from utility_functions import check_ret, arr
-from config import (
+from common.etabs_setup import get_etabs_objects
+from common.utility_functions import check_ret, arr
+from common.config import (
     RS_BASE_ACCEL_G, RS_CHARACTERISTIC_PERIOD, RS_DAMPING_RATIO,
     GRAVITY_ACCEL, RS_FUNCTION_NAME
 )
@@ -98,7 +98,7 @@ def define_response_spectrum_functions_in_etabs():
         return
 
     # 动态导入API对象
-    from etabs_api_loader import get_api_objects
+    from common.etabs_api_loader import get_api_objects
     ETABSv1, System, COMException = get_api_objects()
 
     if System is None:
@@ -156,3 +156,4 @@ __all__ = [
     'generate_response_spectrum_data',
     'define_response_spectrum_functions_in_etabs'
 ]
+

@@ -1,4 +1,4 @@
-# design_force_extraction_extended.py
+﻿# design_force_extraction_extended.py
 """
 扩展的构件设计内力提取模块
 用于提取混凝土构件设计后的所有设计表格数据
@@ -177,7 +177,7 @@ def check_design_completion_extended(sap_model):
     try:
         print("🔍 正在检查混凝土设计完成状态...")
 
-        from etabs_api_loader import get_api_objects
+        from common.etabs_api_loader import get_api_objects
         ETABSv1, System, COMException = get_api_objects()
 
         if System is None:
@@ -292,7 +292,7 @@ def extract_concrete_design_table(sap_model, table_key, alternative_keys, filena
         bool: 提取是否成功
     """
     try:
-        from etabs_api_loader import get_api_objects
+        from common.etabs_api_loader import get_api_objects
         ETABSv1, System, COMException = get_api_objects()
 
         if System is None:
@@ -438,7 +438,7 @@ def extract_table_using_array_method(sap_model, table_key, output_file, componen
         bool: 提取是否成功
     """
     try:
-        from etabs_api_loader import get_api_objects
+        from common.etabs_api_loader import get_api_objects
         ETABSv1, System, COMException = get_api_objects()
 
         db = sap_model.DatabaseTables
@@ -793,7 +793,7 @@ def debug_concrete_design_tables(sap_model):
     try:
         print("🔍 调试：列出所有可用的混凝土设计表格...")
 
-        from etabs_api_loader import get_api_objects
+        from common.etabs_api_loader import get_api_objects
         ETABSv1, System, COMException = get_api_objects()
 
         if System is None:
@@ -927,7 +927,7 @@ def export_table_definitions(sap_model):
     try:
         print("📋 正在导出表格字段定义...")
 
-        from etabs_api_loader import get_api_objects
+        from common.etabs_api_loader import get_api_objects
         ETABSv1, System, COMException = get_api_objects()
 
         if System is None:

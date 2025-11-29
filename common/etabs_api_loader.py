@@ -6,7 +6,7 @@ ETABS API 加载器
 """
 
 import sys
-from config import ETABS_DLL_PATH
+from .config import ETABS_DLL_PATH
 
 
 def load_dotnet_etabs_api():

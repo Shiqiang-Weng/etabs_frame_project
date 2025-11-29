@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Reusable helpers for geometry modifiers and simple parsing utilities.
@@ -7,7 +7,7 @@ Reusable helpers for geometry modifiers and simple parsing utilities.
 import logging
 from typing import List, Optional, Sequence
 
-from utility_functions import arr
+from common.utility_functions import arr
 from .layout import GridConfig
 
 log = logging.getLogger(__name__)
@@ -159,3 +159,4 @@ __all__ = [
     "_parse_axis_index",
     "_is_edge_beam",
 ]
+

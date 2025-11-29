@@ -1,4 +1,4 @@
-# design_forces.py (migrated from design_force_extraction_fixed.py)
+﻿# design_forces.py (migrated from design_force_extraction_fixed.py)
 """
 构件设计内力提取模块（已迁移至 results_extraction 包）
 
@@ -25,9 +25,9 @@ import csv
 import traceback
 from datetime import datetime
 
-from config import *
-from etabs_setup import get_sap_model, ensure_etabs_ready
-from utility_functions import check_ret, arr
+from common.config import *
+from common.etabs_setup import get_sap_model, ensure_etabs_ready
+from common.utility_functions import check_ret, arr
 
 
 # =============================================================================
@@ -220,7 +220,7 @@ def check_design_completion(sap_model):
     try:
         print("🔍 正在检查设计完成状态...")
 
-        from etabs_api_loader import get_api_objects
+        from common.etabs_api_loader import get_api_objects
 
         ETABSv1, System, COMException = get_api_objects()
 
@@ -360,7 +360,7 @@ def extract_design_forces_simple(sap_model, table_key, component_names, output_f
     try:
         print(f"🔍 简化提取方法 - 表格: {table_key}")
 
-        from etabs_api_loader import get_api_objects
+        from common.etabs_api_loader import get_api_objects
 
         ETABSv1, System, COMException = get_api_objects()
 
@@ -490,7 +490,7 @@ def extract_column_design_forces(sap_model, column_names):
     真正的实现还是推荐用 extract_design_forces_simple。
     """
     try:
-        from etabs_api_loader import get_api_objects
+        from common.etabs_api_loader import get_api_objects
 
         ETABSv1, System, COMException = get_api_objects()
 
@@ -594,7 +594,7 @@ def extract_column_pmm_design_forces(sap_model, column_names):
     任一部分成功都会返回 True。
     """
     try:
-        from etabs_api_loader import get_api_objects
+        from common.etabs_api_loader import get_api_objects
 
         ETABSv1, System, COMException = get_api_objects()
 
@@ -910,7 +910,7 @@ def extract_beam_design_forces(sap_model, beam_names):
     提取框架梁设计内力（备用方法）
     """
     try:
-        from etabs_api_loader import get_api_objects
+        from common.etabs_api_loader import get_api_objects
 
         ETABSv1, System, COMException = get_api_objects()
 
@@ -1291,7 +1291,7 @@ def test_simple_api_call(sap_model, table_key):
     try:
         print(f"🧪 测试简单API调用 - 表格: {table_key}")
 
-        from etabs_api_loader import get_api_objects
+        from common.etabs_api_loader import get_api_objects
 
         ETABSv1, System, COMException = get_api_objects()
 
@@ -1375,7 +1375,7 @@ def debug_api_return_structure(sap_model, table_key):
     try:
         print(f"🔍 调试API返回结构 - 表格: {table_key}")
 
-        from etabs_api_loader import get_api_objects
+        from common.etabs_api_loader import get_api_objects
 
         ETABSv1, System, COMException = get_api_objects()
 
@@ -1434,7 +1434,7 @@ def debug_available_tables(sap_model):
     try:
         print("🔍 调试：列出常见可用的数据库表格...")
 
-        from etabs_api_loader import get_api_objects
+        from common.etabs_api_loader import get_api_objects
 
         ETABSv1, System, COMException = get_api_objects()
 
@@ -1515,7 +1515,7 @@ def debug_pmm_tables(sap_model):
     try:
         print("🔍 调试：搜索包含 'Concrete Column PMM' 的表格...")
 
-        from etabs_api_loader import get_api_objects
+        from common.etabs_api_loader import get_api_objects
 
         ETABSv1, System, COMException = get_api_objects()
 
@@ -1592,7 +1592,7 @@ def extract_basic_frame_forces(sap_model, column_names, beam_names):
     try:
         print("🔧 尝试提取基本构件分析内力...")
 
-        from etabs_api_loader import get_api_objects
+        from common.etabs_api_loader import get_api_objects
 
         ETABSv1, System, COMException = get_api_objects()
 
@@ -1707,7 +1707,7 @@ if __name__ == "__main__":
     print("3. 已完成混凝土构件设计计算")
 
     try:
-        from etabs_setup import get_sap_model, ensure_etabs_ready
+        from common.etabs_setup import get_sap_model, ensure_etabs_ready
 
         if ensure_etabs_ready():
             sap_model = get_sap_model()
@@ -1719,3 +1719,4 @@ if __name__ == "__main__":
                 debug_pmm_tables(sap_model)
     except Exception:
         print("\n⚠️ 无法连接到ETABS进行调试")
+

@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-核心结果汇总模块
-只导出核心分析/设计结果文件，并清理多余的结果 CSV/XLS/XLSX/TXT。
-"""
+???CSV/XLS/XLSX/TXT?"""
 
 from __future__ import annotations
 
@@ -12,7 +10,7 @@ from pathlib import Path
 from typing import Dict, Union
 
 from results_extraction.analysis_results_module import extract_modal_and_drift
-from config import SCRIPT_DIRECTORY
+from common.config import SCRIPT_DIRECTORY
 from .design_forces import check_design_completion, extract_design_forces_simple
 
 CORE_RESULT_BASENAMES = {
@@ -26,7 +24,7 @@ _RESULT_EXTS = {".csv", ".xls", ".xlsx", ".txt"}
 
 
 def _cleanup_extra_result_files(output_dir: Path, keep_names: set[str]) -> None:
-    """删除输出目录中非核心的结果文件（仅限 csv/xls/xlsx/txt）。"""
+    """Delete non-core result files in the output directory (csv/xls/xlsx/txt only)."""
     output_dir.mkdir(parents=True, exist_ok=True)
     for p in output_dir.iterdir():
         if not p.is_file():
@@ -37,14 +35,15 @@ def _cleanup_extra_result_files(output_dir: Path, keep_names: set[str]) -> None:
             continue
         try:
             p.unlink()
-            print(f" 已删除多余结果文件: {p.name}")
+            print(f" ? {p.name}")
         except Exception as e:
-            print(f" 警告: 无法删除文件 {p.name}: {e}")
+            print(f" :  {p.name}: {e}")
 
 
 def _ensure_output_path(filename: str, output_dir: Path) -> Path:
     """
-    将设计导出的文件从 SCRIPT_DIRECTORY 移动/收拢到目标目录，返回目标路径。
+    Move an exported design file from SCRIPT_DIRECTORY into the target output
+    directory and return the destination path.
     """
     src = Path(SCRIPT_DIRECTORY) / filename
     dest = output_dir / filename
@@ -60,7 +59,7 @@ def _ensure_output_path(filename: str, output_dir: Path) -> Path:
 
 
 def _export_column_pmm_raw(sap_model, output_dir: Path) -> Path:
-    """仅导出柱 P-M-M 原始包络表，不生成汇总表。"""
+    """Export column P-M-M raw envelope table without generating summaries."""
     pmm_table_candidates = [
         "Concrete Column PMM Envelope - Chinese 2010",
         "Concrete Column PMM - Chinese 2010",
@@ -79,7 +78,7 @@ def _export_column_pmm_raw(sap_model, output_dir: Path) -> Path:
                 output_name,
             )
         except Exception as e:
-            print(f"⚠️ 通过表格 {table_key} 导出 P-M-M 数据时出错: {e}")
+            print(f"  {table_key}  P-M-M ? {e}")
             success = False
         if success:
             return _ensure_output_path(output_name, output_dir)
@@ -88,8 +87,8 @@ def _export_column_pmm_raw(sap_model, output_dir: Path) -> Path:
 
 def export_core_results(sap_model, output_dir: Union[str, Path]) -> Dict[str, Path]:
     """
-    导出核心分析/设计结果文件。
-    返回 dict[name, Path]，键固定为 5 个核心文件。
+    Export core analysis/design result files and return a mapping of name to path.
+    Five key outputs are always included.
     """
     output_directory = Path(output_dir)
     output_directory.mkdir(parents=True, exist_ok=True)
@@ -101,18 +100,18 @@ def export_core_results(sap_model, output_dir: Union[str, Path]) -> Dict[str, Pa
     result["column_pmm_design_forces_raw"] = output_directory / "column_pmm_design_forces_raw.csv"
     result["column_shear_envelope"] = output_directory / "column_shear_envelope.csv"
 
-    # 动态分析概要
+    # dynamic analysis summary
     if not result["analysis_dynamic_summary"].exists():
         result["analysis_dynamic_summary"] = extract_modal_and_drift(sap_model, output_directory)
 
-    # 设计状态检查（失败仍继续尝试导出）
+    # design status check (failure still tries to export)
     try:
         if not check_design_completion(sap_model):
-            print("⚠️ 设计状态检查未通过，仍将尝试导出核心设计结果。")
+            print("Warning: design status check failed; attempting to export core design results anyway.")
     except Exception as e:
-        print(f"⚠️ 设计检查出错: {e}")
+        print(f"Warning: design status check raised an error: {e}")
 
-    # 梁弯矩包络
+    # beam flexure envelope
     try:
         if extract_design_forces_simple(
             sap_model,
@@ -124,9 +123,9 @@ def export_core_results(sap_model, output_dir: Union[str, Path]) -> Dict[str, Pa
                 "beam_flexure_envelope.csv", output_directory
             )
     except Exception as e:
-        print(f"⚠️ 梁弯矩包络导出异常: {e}")
+        print(f"Warning: beam flexure envelope export failed: {e}")
 
-    # 梁剪力包络
+    # beam shear envelope
     try:
         if extract_design_forces_simple(
             sap_model,
@@ -138,15 +137,17 @@ def export_core_results(sap_model, output_dir: Union[str, Path]) -> Dict[str, Pa
                 "beam_shear_envelope.csv", output_directory
             )
     except Exception as e:
-        print(f"⚠️ 梁剪力包络导出异常: {e}")
+        print(f"Warning: beam shear envelope export failed: {e}")
 
-    # 柱 P-M-M 原始设计内力
+    # column P-M-M design forces
     try:
-        result["column_pmm_design_forces_raw"] = _export_column_pmm_raw(sap_model, output_directory)
+        result["column_pmm_design_forces_raw"] = _export_column_pmm_raw(
+            sap_model, output_directory
+        )
     except Exception as e:
-        print(f"⚠️ 柱 P-M-M 导出异常: {e}")
+        print(f"Warning: column P-M-M export failed: {e}")
 
-    # 柱剪力包络
+    # column shear envelope
     try:
         if extract_design_forces_simple(
             sap_model,
@@ -158,14 +159,14 @@ def export_core_results(sap_model, output_dir: Union[str, Path]) -> Dict[str, Pa
                 "column_shear_envelope.csv", output_directory
             )
     except Exception as e:
-        print(f"⚠️ 柱剪力包络导出异常: {e}")
+        print(f"Warning: column shear envelope export failed: {e}")
 
     keep_names = {p.name for p in result.values()}
     _cleanup_extra_result_files(output_directory, keep_names)
     return result
 
-
 __all__ = [
     "CORE_RESULT_BASENAMES",
     "export_core_results",
 ]
+

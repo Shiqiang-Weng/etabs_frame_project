@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 ETABS API compatibility helpers for geometry modeling.
@@ -11,7 +11,7 @@ ETABS API compatibility helpers for geometry modeling.
 import logging
 from typing import List, Tuple
 
-from etabs_setup import get_etabs_objects
+from common.etabs_setup import get_etabs_objects
 
 log = logging.getLogger(__name__)
 if not log.handlers:
@@ -35,7 +35,7 @@ def ensure_model_units() -> bool:
             log.info("Model units already set to kN-m.")
             return True
 
-        from etabs_api_loader import get_api_objects
+        from common.etabs_api_loader import get_api_objects
 
         ETABSv1, _, _ = get_api_objects()
         ret_code = sap_model.SetPresentUnits(ETABSv1.eUnits.kN_m_C)
@@ -66,7 +66,7 @@ def _get_all_points_safe(point_obj, csys: str = "Global") -> Tuple[int, List[str
         log.debug("GetAllPoints(csys) call failed: %s", exc, exc_info=True)
 
     try:
-        from etabs_api_loader import get_api_objects
+        from common.etabs_api_loader import get_api_objects
 
         _, System, _ = get_api_objects()
         n_max = 20000
@@ -118,7 +118,7 @@ def _get_name_list_safe(obj) -> List[str]:
         log.debug("GetNameList() call failed: %s", exc, exc_info=True)
 
     try:
-        from etabs_api_loader import get_api_objects
+        from common.etabs_api_loader import get_api_objects
 
         _, System, _ = get_api_objects()
         n_max = 50000
@@ -193,3 +193,4 @@ __all__ = [
     "debug_joint_coordinates",
     "get_all_points_reference_method",
 ]
+

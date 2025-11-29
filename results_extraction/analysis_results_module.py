@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 分析结果模块
@@ -382,7 +382,7 @@ def extract_modal_and_mass_info(sap_model) -> None:
         return
 
     # 动态导入API对象
-    from etabs_api_loader import get_api_objects
+    from common.etabs_api_loader import get_api_objects
 
     ETABSv1, System, COMException = get_api_objects()
 
@@ -621,7 +621,7 @@ def extract_story_drifts_improved(sap_model, target_load_cases: List[str]) -> No
         return
 
     # 动态导入API对象
-    from etabs_api_loader import get_api_objects
+    from common.etabs_api_loader import get_api_objects
 
     ETABSv1, System, COMException = get_api_objects()
 

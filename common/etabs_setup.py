@@ -7,8 +7,8 @@ ETABS 设置模块
 
 import time
 import sys
-from utility_functions import check_ret
-from config import (
+from .utility_functions import check_ret
+from .config import (
     ATTACH_TO_INSTANCE, REMOTE, REMOTE_COMPUTER, SPECIFY_PATH, PROGRAM_PATH,
     NUM_STORIES, TYPICAL_STORY_HEIGHT, BOTTOM_STORY_HEIGHT,
     NUM_GRID_LINES_X, NUM_GRID_LINES_Y, SPACING_X, SPACING_Y
@@ -24,7 +24,7 @@ def setup_etabs():
     global my_etabs, sap_model
 
     # 重新导入API对象以确保它们已正确加载
-    from etabs_api_loader import get_api_objects
+    from .etabs_api_loader import get_api_objects
     ETABSv1, System, COMException = get_api_objects()
 
     if ETABSv1 is None:

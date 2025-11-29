@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 荷载工况定义模块
@@ -17,7 +17,7 @@ def ensure_dead_pattern():
         return
 
     # 动态导入API对象
-    from etabs_api_loader import get_api_objects
+    from common.etabs_api_loader import get_api_objects
     ETABSv1, System, COMException = get_api_objects()
 
     print("\n确保DEAD荷载模式存在...")
@@ -36,7 +36,7 @@ def ensure_live_pattern():
         return
 
     # 动态导入API对象
-    from etabs_api_loader import get_api_objects
+    from common.etabs_api_loader import get_api_objects
     ETABSv1, System, COMException = get_api_objects()
 
     print("\n确保LIVE荷载模式存在...")
@@ -54,7 +54,7 @@ def define_static_load_cases():
         return
 
     # 动态导入API对象
-    from etabs_api_loader import get_api_objects
+    from common.etabs_api_loader import get_api_objects
     ETABSv1, System, COMException = get_api_objects()
 
     print("\n定义静力荷载工况...")
@@ -78,7 +78,7 @@ def define_modal_case():
         return
 
     # 动态导入API对象
-    from etabs_api_loader import get_api_objects
+    from common.etabs_api_loader import get_api_objects
     ETABSv1, System, COMException = get_api_objects()
 
     print(f"\n定义模态分析工况 '{SETTINGS.response_spectrum.modal_case_name}'...")
@@ -115,7 +115,7 @@ def define_response_spectrum_cases():
         return []
 
     # 动态导入API对象
-    from etabs_api_loader import get_api_objects
+    from common.etabs_api_loader import get_api_objects
     ETABSv1, System, COMException = get_api_objects()
 
     print("\n定义反应谱工况...")
@@ -169,7 +169,7 @@ def define_response_spectrum_combinations(rs_cases_created):
         return
 
     # 动态导入API对象
-    from etabs_api_loader import get_api_objects
+    from common.etabs_api_loader import get_api_objects
     ETABSv1, System, COMException = get_api_objects()
 
     print("\n定义地震效应组合...")
@@ -202,7 +202,7 @@ def define_mass_source_simple():
         return
 
     # 动态导入API对象
-    from etabs_api_loader import get_api_objects
+    from common.etabs_api_loader import get_api_objects
     ETABSv1, System, COMException = get_api_objects()
 
     print("\n定义质量源（简化版）...")

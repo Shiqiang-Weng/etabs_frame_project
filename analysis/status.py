@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from etabs_setup import get_etabs_objects
+from common.etabs_setup import get_etabs_objects
 
 
 def _log(message: str) -> None:
@@ -38,3 +38,4 @@ def check_analysis_completion() -> bool:
     except Exception as exc:  # noqa: BLE001
         _log(f"❌ 检查分析状态时出错: {exc}")
         return False
+

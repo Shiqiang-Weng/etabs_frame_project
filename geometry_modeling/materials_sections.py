@@ -14,7 +14,7 @@ def define_materials():
     if sap_model is None:
         return
 
-    from etabs_api_loader import get_api_objects
+    from common.etabs_api_loader import get_api_objects
     ETABSv1, System, COMException = get_api_objects()
 
     print("\nDefining concrete material...")
@@ -89,7 +89,7 @@ def define_slab_sections():
     if sap_model is None:
         return
 
-    from etabs_api_loader import get_api_objects
+    from common.etabs_api_loader import get_api_objects
     ETABSv1, System, COMException = get_api_objects()
 
     print("\nDefining slab section...")
@@ -117,7 +117,7 @@ def define_diaphragms():
     if sap_model is None:
         return
 
-    from etabs_api_loader import get_api_objects
+    from common.etabs_api_loader import get_api_objects
     ETABSv1, System, COMException = get_api_objects()
 
     print("\nDefining diaphragms...")
@@ -162,3 +162,4 @@ __all__ = [
     'define_diaphragms',
     'define_all_materials_and_sections',
 ]
+

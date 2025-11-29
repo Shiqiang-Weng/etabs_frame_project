@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 荷载分配模块
@@ -51,7 +51,7 @@ def assign_dead_and_live_loads_to_slabs(
     for slab_name in slab_names:
         try:
             # 动态导入API对象
-            from etabs_api_loader import get_api_objects
+            from common.etabs_api_loader import get_api_objects
             ETABSv1, System, COMException = get_api_objects()
 
             if ETABSv1 is None:
@@ -115,7 +115,7 @@ def assign_finish_loads_to_beams(
     for beam_name in beam_names:
         try:
             # 动态导入API对象
-            from etabs_api_loader import get_api_objects
+            from common.etabs_api_loader import get_api_objects
             ETABSv1, System, COMException = get_api_objects()
 
             if ETABSv1 is None:
@@ -173,7 +173,7 @@ def assign_column_loads_fixed(column_names: List[str]):
     for column_name in column_names:
         try:
             # 动态导入API对象
-            from etabs_api_loader import get_api_objects
+            from common.etabs_api_loader import get_api_objects
             ETABSv1, System, COMException = get_api_objects()
 
             if ETABSv1 is None:

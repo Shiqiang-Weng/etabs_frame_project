@@ -20,7 +20,7 @@ def check_ret(ret_val, func_name, ok_codes=(0,)):
     ok_codes  : tuple    允许的返回码，默认 (0,)
     """
     # 动态导入System以避免循环导入
-    from etabs_api_loader import get_api_objects
+    from .etabs_api_loader import get_api_objects
     ETABSv1, System, COMException = get_api_objects()
 
     if System is None:
@@ -65,7 +65,7 @@ def check_ret(ret_val, func_name, ok_codes=(0,)):
 def arr(py_list: List[Any], sys_type=None):
     """将Python列表转换为.NET数组"""
     # 动态导入System以避免循环导入
-    from etabs_api_loader import get_api_objects
+    from .etabs_api_loader import get_api_objects
     ETABSv1, System, COMException = get_api_objects()
 
     if System is None:
@@ -83,7 +83,7 @@ def add_frame_by_coord_custom(frame_object_api, x1: float, y1: float, z1: float,
                               user_name_in: str, csys: str = "Global") -> Tuple[int, str]:
     """自定义框架对象创建函数"""
     # 动态导入System
-    from etabs_api_loader import get_api_objects
+    from .etabs_api_loader import get_api_objects
     ETABSv1, System, COMException = get_api_objects()
 
     etabs_assigned_name_ref = System.String("")
@@ -118,7 +118,7 @@ def add_area_by_coord_custom(area_object_api, num_points: int, x_coords_py: List
                              csys: str = "Global") -> Tuple[int, str]:
     """自定义面对象创建函数"""
     # 动态导入System
-    from etabs_api_loader import get_api_objects
+    from .etabs_api_loader import get_api_objects
     ETABSv1, System, COMException = get_api_objects()
 
     etabs_assigned_name_ref = System.String("")

@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 构件配筋设计模块 v22.24b (梁提取功能增强版)
 - 整合了 design_module_column.py 的单位转换修复功能
@@ -319,7 +319,7 @@ def prepare_model_for_design():
         return False
 
     try:
-        from config import FRAME_BEAM_SECTION_NAME, FRAME_COLUMN_SECTION_NAME
+        from common.config import FRAME_BEAM_SECTION_NAME, FRAME_COLUMN_SECTION_NAME
 
         # 确保ETABS v22 API正确加载
         ETABSv1 = ensure_etabs_v22_loaded()
