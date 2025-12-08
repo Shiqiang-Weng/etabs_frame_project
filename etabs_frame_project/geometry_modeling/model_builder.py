@@ -26,7 +26,14 @@ from .geometry_utils import (
     apply_slab_membrane_modifiers,
     assign_diaphragm_constraints_by_story,
 )
-from .layout import GridConfig, StoryConfig, default_grid_config, default_story_config
+from .layout import (
+    GridConfig,
+    StoryConfig,
+    default_grid_config,
+    default_story_config,
+    grid_config_from_design,
+    story_config_from_design,
+)
 
 log = logging.getLogger(__name__)
 if not log.handlers:
@@ -205,10 +212,21 @@ def create_frame_structure() -> Tuple[List[str], List[str], List[str], Dict[int,
     return workflow.build()
 
 
+def create_frame_structure_from_design(design) -> Tuple[List[str], List[str], List[str], Dict[int, float]]:
+    sap_model = _require_sap_model()
+    workflow = FrameGeometryWorkflow(
+        sap_model,
+        grid_config_from_design(design),
+        story_config_from_design(design),
+    )
+    return workflow.build()
+
+
 __all__ = [
     "ElementCreator",
     "FrameGeometryWorkflow",
     "create_frame_structure",
+    "create_frame_structure_from_design",
     "ensure_model_units",
     "fix_base_constraints_comprehensive",
 ]

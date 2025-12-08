@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Grid and story layout definitions for geometry modeling.
-"""
+"""Grid and story layout definitions for geometry modeling."""
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Tuple, TYPE_CHECKING
 
+from common import config
 from common.config import SETTINGS
+
+if TYPE_CHECKING:
+    from parametric_model.param_sampling import DesignCaseConfig
 
 
 @dataclass(frozen=True)
@@ -91,4 +93,31 @@ def default_story_config() -> StoryConfig:
     )
 
 
-__all__ = ["GridConfig", "StoryConfig", "default_grid_config", "default_story_config"]
+def grid_config_from_design(design: "DesignCaseConfig") -> GridConfig:
+    topo = design.topology
+    return GridConfig(
+        num_x=topo["n_x"] + 1,
+        num_y=topo["n_y"] + 1,
+        spacing_x=topo["l_x"] / 1000.0,
+        spacing_y=topo["l_y"] / 1000.0,
+    )
+
+
+def story_config_from_design(design: "DesignCaseConfig") -> StoryConfig:
+    topo = design.topology
+    return StoryConfig(
+        num_stories=topo["N_st"],
+        typical_height=config.TYPICAL_STORY_HEIGHT,
+        bottom_height=config.BOTTOM_STORY_HEIGHT,
+        beam_height=config.FRAME_BEAM_HEIGHT,
+    )
+
+
+__all__ = [
+    "GridConfig",
+    "StoryConfig",
+    "default_grid_config",
+    "default_story_config",
+    "grid_config_from_design",
+    "story_config_from_design",
+]

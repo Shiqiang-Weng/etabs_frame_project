@@ -1,9 +1,10 @@
 ﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Materials and section definitions for the frame model.
-"""
+"""Materials and section definitions for the frame model."""
 
+from typing import Any, Dict
+
+from common import config
 from common.etabs_setup import get_etabs_objects
 from common.utility_functions import check_ret
 from common.config import SETTINGS
@@ -155,11 +156,48 @@ def define_all_materials_and_sections():
     print("Materials and sections defined")
 
 
+def create_parametric_frame_sections_from_design(design) -> None:
+    """Create rectangle sections for all column/beam groups defined in design."""
+    sample_sizing: Dict[str, Dict[str, float]] = design.sizing
+    my_etabs, sap_model = get_etabs_objects()
+    if sap_model is None:
+        return
+
+    prop_frame = sap_model.PropFrame
+
+    for group_name, params in sample_sizing.items():
+        group_id = group_name.replace("Group", "")
+
+        col_corner = params[f"C_G{group_id}_Corner_b"]
+        col_edge = params[f"C_G{group_id}_Edge_b"]
+        col_int = params[f"C_G{group_id}_Interior_b"]
+
+        b_edge = params[f"B_G{group_id}_Edge_b"]
+        h_edge = params[f"B_G{group_id}_Edge_h"]
+        b_int = params[f"B_G{group_id}_Interior_b"]
+        h_int = params[f"B_G{group_id}_Interior_h"]
+
+        section_specs = {
+            f"C_G{group_id}_CORNER_{int(col_corner)}": (col_corner, col_corner),
+            f"C_G{group_id}_EDGE_{int(col_edge)}": (col_edge, col_edge),
+            f"C_G{group_id}_INTERIOR_{int(col_int)}": (col_int, col_int),
+            f"B_G{group_id}_EDGE_{int(b_edge)}x{int(h_edge)}": (b_edge, h_edge),
+            f"B_G{group_id}_INT_{int(b_int)}x{int(h_int)}": (b_int, h_int),
+        }
+
+        for name, (b_mm, h_mm) in section_specs.items():
+            b = b_mm / 1000.0
+            h = h_mm / 1000.0
+            ret = prop_frame.SetRectangle(name, config.CONCRETE_MATERIAL_NAME, b, h)
+            check_ret(ret, f"SetRectangle({name})")
+
+
 __all__ = [
     'define_materials',
     'define_frame_sections',
     'define_slab_sections',
     'define_diaphragms',
     'define_all_materials_and_sections',
+    'create_parametric_frame_sections_from_design',
 ]
 

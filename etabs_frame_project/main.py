@@ -12,6 +12,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
+from typing import Optional
 
 from common import config
 from common.etabs_api_loader import load_dotnet_etabs_api
@@ -21,18 +22,59 @@ import geometry_modeling
 import load_module
 import analysis
 import results_extraction
+from parametric_model.param_sampling import (
+    DesignCaseConfig,
+    generate_param_plan,
+    load_param_plan,
+)
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+PLAN_DIR = PROJECT_ROOT / "parametric_model"
+PLAN_PATH = PLAN_DIR / "param_plan.jsonl"
+PLAN_SEED = 42
+PLAN_CASES = 10
 
 
-def print_project_info() -> None:
+def prepare_design() -> DesignCaseConfig:
+    """Generate/load plan (10 samples) and return case 0 design config."""
+    PLAN_DIR.mkdir(parents=True, exist_ok=True)
+    if not PLAN_PATH.exists():
+        print(f"[参数化模式] 未找到方案文件，自动生成: {PLAN_PATH} (cases={PLAN_CASES})")
+        generate_param_plan(num_cases=PLAN_CASES, out_path=PLAN_PATH, seed=PLAN_SEED)
+    else:
+        print(f"[参数化模式] 使用已存在的方案文件: {PLAN_PATH}")
+
+    if not PLAN_PATH.exists():
+        raise FileNotFoundError(f"期望的方案文件不存在: {PLAN_PATH}")
+
+    samples = load_param_plan(PLAN_PATH)
+    print(f"[参数化模式] 从 {PLAN_PATH} 读取到 {len(samples)} 个样本")
+    if not samples:
+        raise RuntimeError(f"方案文件 {PLAN_PATH} 中没有任何样本")
+
+    case_index = 0
+    sample = samples[case_index]
+    case_id = sample.get("case_id", case_index)
+    design_case = DesignCaseConfig.from_sample(case_id, sample)
+    print(f"[参数化模式] 将运行 case_index={case_index}, case_id={design_case.case_id}")
+    return design_case
+
+
+def print_project_info(design: Optional[DesignCaseConfig] = None) -> None:
     """打印项目和脚本配置信息"""
-    total_height = config.BOTTOM_STORY_HEIGHT + (config.NUM_STORIES - 1) * config.TYPICAL_STORY_HEIGHT
+    num_stories = design.topology["N_st"] if design else config.NUM_STORIES
+    total_height = config.BOTTOM_STORY_HEIGHT + (num_stories - 1) * config.TYPICAL_STORY_HEIGHT
     print("=" * 80)
     print("ETABS 框架结构自动建模脚本 (规范四阶段流水线)")
     print("=" * 80)
     print("关键参数:")
-    print(f"- 楼层数 {config.NUM_STORIES}, 总高: {total_height:.1f} m")
+    print(f"- 楼层数 {num_stories}, 总高: {total_height:.1f} m")
     print(f"- 执行设计: {'是' if config.PERFORM_CONCRETE_DESIGN else '否'}")
     print(f"- 提取设计内力: {'是' if config.PERFORM_CONCRETE_DESIGN and config.EXPORT_ALL_DESIGN_FILES else '否'}")
+    if design:
+        topo = design.topology
+        print(f"- 参数化方案 case_id={design.case_id}: n_x={topo['n_x']}, n_y={topo['n_y']}, "
+              f"l_x={topo['l_x']}mm, l_y={topo['l_y']}mm")
     print("=" * 80)
 
 
@@ -46,11 +88,16 @@ def stage_setup_and_init():
     return sap_model
 
 
-def stage_geometry(sap_model):
+def stage_geometry(sap_model, design: Optional[DesignCaseConfig] = None):
     """阶段 1：几何建模（含材料/截面定义）"""
     print("\n[阶段1] 几何建模")
     geometry_modeling.define_all_materials_and_sections()
-    column_names, beam_names, slab_names, _ = geometry_modeling.create_frame_structure()
+    if design is None:
+        column_names, beam_names, slab_names, _ = geometry_modeling.create_frame_structure()
+    else:
+        column_names, beam_names, slab_names, _ = geometry_modeling.create_frame_structure_from_design(design)
+        geometry_modeling.create_parametric_frame_sections_from_design(design)
+        geometry_modeling.assign_sections_by_design(design, design.topology)
     return column_names, beam_names, slab_names
 
 
@@ -76,9 +123,7 @@ def stage_results(sap_model, frame_element_names, output_dir: Path, workflow_sta
     print("\n[阶段4] 结果提取与报表")
     summary_path = results_extraction.extract_modal_and_drift(sap_model, output_dir)
     print(f"动态分析结果概要已写入 Excel: {summary_path}")
-    # 导出梁/柱分析内力表到 data_extraction 子目录
     results_extraction.export_beam_and_column_element_forces(output_dir)
-    # 使用梁/柱 Element Forces 汇总生成 frame_member_forces.csv（包含所有楼层与组合）
     results_extraction.export_frame_member_forces(output_dir)
     workflow_state["analysis_completed"] = True
     return summary_path
@@ -133,7 +178,6 @@ def stage_design_and_forces(sap_model, column_names, beam_names, output_dir: Pat
     except Exception as exc:  # noqa: BLE001
         print(f"设计内力提取模块发生严重错误: {exc}")
         traceback.print_exc()
-    # 设计完成后再刷新一次梁/柱内力与汇总（此时设计组合已生成，确保包含组合内力）
     try:
         print("\n[阶段5] 设计完成后刷新梁/柱/框架内力（含设计组合）")
         analysis_output_dir.mkdir(parents=True, exist_ok=True)
@@ -173,7 +217,6 @@ def generate_final_report(start_time, workflow_state):
     if workflow_state.get("design_completed"):
         print(f"   - 配筋结果: {design_dir / 'concrete_design_results_enhanced.csv'}")
         print(f"   - 设计报告: {design_dir / 'design_summary_report.txt'}")
-    # 分析内力表（新增）
     print(f"   - 梁分析内力表: {analysis_dir / 'beam_element_forces.csv'}")
     print(f"   - 柱分析内力表: {analysis_dir / 'column_element_forces.csv'}")
 
@@ -207,6 +250,7 @@ def generate_final_report(start_time, workflow_state):
 
 def run_pipeline():
     """Run the full four-stage pipeline."""
+    design_case = prepare_design()
     script_start_time = time.time()
     workflow_state = {
         "analysis_completed": False,
@@ -215,9 +259,9 @@ def run_pipeline():
     }
 
     try:
-        print_project_info()
+        print_project_info(design_case)
         sap_model = stage_setup_and_init()
-        column_names, beam_names, slab_names = stage_geometry(sap_model)
+        column_names, beam_names, slab_names = stage_geometry(sap_model, design_case)
         stage_loads(column_names, beam_names, slab_names)
         stage_analysis(sap_model)
         output_dir = Path(config.DATA_EXTRACTION_DIR)
@@ -242,7 +286,6 @@ def run_pipeline():
         generate_final_report(script_start_time, workflow_state)
         if not config.ATTACH_TO_INSTANCE:
             print("脚本执行完毕，ETABS 将保持打开状态。")
-        # 清理 __pycache__ 目录，保持目录整洁
         file_operations.remove_pycache()
 
 
