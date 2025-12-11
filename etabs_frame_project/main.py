@@ -12,7 +12,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Tuple
 
 from common import config
 from common.etabs_api_loader import load_dotnet_etabs_api
@@ -25,38 +25,179 @@ import results_extraction
 from parametric_model.param_sampling import (
     DesignCaseConfig,
     generate_param_plan,
+    generate_param_plan_multi_files,
+    find_param_plan_file,
     load_param_plan,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 PLAN_DIR = PROJECT_ROOT / "parametric_model"
-PLAN_PATH = PLAN_DIR / "param_plan.jsonl"
+PLAN_PREFIX = "param_plan"
+PLAN_PATH = PLAN_DIR / f"{PLAN_PREFIX}.jsonl"
+PLAN_AUTO_DIR = PLAN_DIR / "param_plan_auto_generated"
 PLAN_SEED = 42
-PLAN_CASES = 10
+PLAN_AUTO_CASES = 10000
+
+ORIGINAL_SCRIPT_DIRECTORY = Path(config.SCRIPT_DIRECTORY)
+ORIGINAL_MODEL_NAME = config.MODEL_NAME
+
+
+def _resolve_case_id(sample: dict, fallback_id: int) -> int:
+    for key in ("case_id", "num", "case", "id", "case_no"):
+        raw = sample.get(key)
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            continue
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            continue
+    return fallback_id
+
+
+def _refresh_settings_paths() -> None:
+    """刷新 config.SETTINGS 中的路径信息，保持新旧接口一致。"""
+    config.SETTINGS = config.Settings(
+        paths=config.PathsConfig(
+            use_net_core=config.USE_NET_CORE,
+            program_path=config.PROGRAM_PATH,
+            dll_path=config.ETABS_DLL_PATH,
+            script_directory=config.SCRIPT_DIRECTORY,
+            data_extraction_dir=config.DATA_EXTRACTION_DIR,
+            analysis_data_dir=config.ANALYSIS_DATA_DIR,
+            design_data_dir=config.DESIGN_DATA_DIR,
+            model_path=config.MODEL_PATH,
+        ),
+        grid=config.SETTINGS.grid,
+        sections=config.SETTINGS.sections,
+        loads=config.SETTINGS.loads,
+        response_spectrum=config.SETTINGS.response_spectrum,
+        design=config.SETTINGS.design,
+    )
+
+
+def _patch_module_paths_for_case() -> None:
+    """同步其他模块中缓存的路径常量，确保输出按案例分目录。"""
+    import common.file_operations as file_ops
+    file_ops.MODEL_PATH = config.MODEL_PATH
+    file_ops.SCRIPT_DIRECTORY = config.SCRIPT_DIRECTORY
+    file_ops.DATA_EXTRACTION_DIR = config.DATA_EXTRACTION_DIR
+    file_ops.ANALYSIS_DATA_DIR = config.ANALYSIS_DATA_DIR
+    file_ops.DESIGN_DATA_DIR = config.DESIGN_DATA_DIR
+
+    import analysis.runner as runner
+    runner.MODEL_PATH = config.MODEL_PATH
+
+    import analysis.design_workflow as design_workflow
+    design_workflow.DESIGN_DATA_DIR = config.DESIGN_DATA_DIR
+    design_workflow.SCRIPT_DIRECTORY = config.SCRIPT_DIRECTORY
+
+    import results_extraction.member_forces as member_forces
+    member_forces.ANALYSIS_DATA_DIR = config.ANALYSIS_DATA_DIR
+
+    import results_extraction.core_results_module as core_results_module
+    core_results_module.SCRIPT_DIRECTORY = config.SCRIPT_DIRECTORY
+    core_results_module.DESIGN_DATA_DIR = config.DESIGN_DATA_DIR
+    core_results_module.ANALYSIS_DATA_DIR = config.ANALYSIS_DATA_DIR
+
+    import results_extraction.design_forces as design_forces
+    design_forces.DESIGN_DATA_DIR = config.DESIGN_DATA_DIR
+
+    import results_extraction.concrete_frame_detail_data as cfdd
+    cfdd.DESIGN_DATA_DIR = config.DESIGN_DATA_DIR
+
+    import results_extraction as re_init
+    re_init.SCRIPT_DIRECTORY = config.SCRIPT_DIRECTORY
+    re_init.DATA_EXTRACTION_DIR = config.DATA_EXTRACTION_DIR
+    re_init.ANALYSIS_DATA_DIR = config.ANALYSIS_DATA_DIR
+    re_init.DESIGN_DATA_DIR = config.DESIGN_DATA_DIR
+
+
+def set_case_output_paths(case_id: int) -> Path:
+    """
+    根据案例编号更新路径到 case_{id} 子目录，所有输出（模型/分析/设计）均落在该目录。
+    """
+    case_dir = ORIGINAL_SCRIPT_DIRECTORY / f"case_{case_id}"
+    data_dir = case_dir / "data_extraction"
+    analysis_dir = data_dir / "analysis_data"
+    design_dir = data_dir / "design_data"
+
+    config.SCRIPT_DIRECTORY = str(case_dir)
+    config.DATA_EXTRACTION_DIR = str(data_dir)
+    config.ANALYSIS_DATA_DIR = str(analysis_dir)
+    config.DESIGN_DATA_DIR = str(design_dir)
+    config.MODEL_PATH = str(case_dir / ORIGINAL_MODEL_NAME)
+
+    _refresh_settings_paths()
+    _patch_module_paths_for_case()
+    return case_dir
+
+
+def _collect_auto_plan_files(auto_dir: Path) -> List[Path]:
+    """收集自动生成的多文件方案列表。"""
+    if not auto_dir.exists():
+        return []
+    return sorted(auto_dir.glob("param_plan_auto_generated_*.csv"))
+
+
+def _load_plan_files(plan_files: List[Path]) -> List[dict]:
+    """加载多个方案文件并拼接样本列表。"""
+    samples: List[dict] = []
+    for path in plan_files:
+        part = load_param_plan(path)
+        print(f"[参数化模式] 从 {path} 读取到 {len(part)} 个样本")
+        samples.extend(part)
+    return samples
+
+
+def prepare_design_cases() -> Tuple[Path, List[DesignCaseConfig]]:
+    """Locate or generate a param plan and normalize all cases."""
+    PLAN_DIR.mkdir(parents=True, exist_ok=True)
+    manual_plan = find_param_plan_file(PLAN_DIR, PLAN_PREFIX)
+    plan_files: List[Path] = []
+
+    if manual_plan:
+        print(f"[参数化模式] 检测到方案文件: {manual_plan}")
+        plan_files = [manual_plan]
+    else:
+        auto_files = _collect_auto_plan_files(PLAN_AUTO_DIR)
+        if auto_files:
+            plan_files = auto_files
+            print(f"[参数化模式] 使用已存在的自动方案目录: {PLAN_AUTO_DIR}")
+        else:
+            print(
+                f"[参数化模式] 未找到方案文件，自动生成: "
+                f"{PLAN_AUTO_DIR / 'param_plan_auto_generated_*.csv'} (cases={PLAN_AUTO_CASES})"
+            )
+            plan_files = generate_param_plan_multi_files(
+                total_cases=PLAN_AUTO_CASES,
+                out_dir=PLAN_AUTO_DIR,
+                num_files=10,
+                seed=PLAN_SEED,
+                batch_flush_size=1000,
+                sleep_seconds_between_flush=3,
+                max_attempts=200000,
+            )
+
+    if not plan_files:
+        raise FileNotFoundError("未找到任何参数方案文件，自动生成也失败。")
+
+    samples = _load_plan_files(plan_files)
+    if not samples:
+        raise RuntimeError(f"方案文件 {plan_files} 中没有任何样本")
+
+    design_cases: List[DesignCaseConfig] = []
+    for sample in samples:
+        fallback = len(design_cases)
+        case_id = _resolve_case_id(sample, fallback)
+        design_cases.append(DesignCaseConfig.from_sample(case_id, sample))
+    return plan_files[0], design_cases
 
 
 def prepare_design() -> DesignCaseConfig:
-    """Generate/load plan (10 samples) and return case 0 design config."""
-    PLAN_DIR.mkdir(parents=True, exist_ok=True)
-    if not PLAN_PATH.exists():
-        print(f"[参数化模式] 未找到方案文件，自动生成: {PLAN_PATH} (cases={PLAN_CASES})")
-        generate_param_plan(num_cases=PLAN_CASES, out_path=PLAN_PATH, seed=PLAN_SEED)
-    else:
-        print(f"[参数化模式] 使用已存在的方案文件: {PLAN_PATH}")
-
-    if not PLAN_PATH.exists():
-        raise FileNotFoundError(f"期望的方案文件不存在: {PLAN_PATH}")
-
-    samples = load_param_plan(PLAN_PATH)
-    print(f"[参数化模式] 从 {PLAN_PATH} 读取到 {len(samples)} 个样本")
-    if not samples:
-        raise RuntimeError(f"方案文件 {PLAN_PATH} 中没有任何样本")
-
-    case_index = 0
-    sample = samples[case_index]
-    case_id = sample.get("case_id", case_index)
-    design_case = DesignCaseConfig.from_sample(case_id, sample)
-    print(f"[参数化模式] 将运行 case_index={case_index}, case_id={design_case.case_id}")
+    """保持兼容：仅返回首个方案。"""
+    _, design_cases = prepare_design_cases()
+    design_case = design_cases[0]
+    print(f"[参数化模式] 将运行 case_index=0, case_id={design_case.case_id}")
     return design_case
 
 
@@ -248,9 +389,14 @@ def generate_final_report(start_time, workflow_state):
     print("=" * 80)
 
 
-def run_pipeline():
-    """Run the full four-stage pipeline."""
-    design_case = prepare_design()
+def run_single_case(design_case: DesignCaseConfig, case_index: int, total_cases: int) -> None:
+    """Execute the full pipeline for one design case."""
+    print("\n" + "=" * 80)
+    print(f"[参数化模式] 开始案例 {case_index}/{total_cases} (case_id={design_case.case_id})")
+    print("=" * 80)
+    # 统一将所有输出指向 case_{id} 子目录，避免多案例结果互相覆盖
+    case_dir = set_case_output_paths(design_case.case_id)
+    print(f"[参数化模式] 当前案例输出目录: {case_dir}")
     script_start_time = time.time()
     workflow_state = {
         "analysis_completed": False,
@@ -285,8 +431,35 @@ def run_pipeline():
     finally:
         generate_final_report(script_start_time, workflow_state)
         if not config.ATTACH_TO_INSTANCE:
-            print("脚本执行完毕，ETABS 将保持打开状态。")
+            # 每个案例结束后等待 10 秒再关闭 ETABS，保证模型文件写入完成
+            print(f"[参数化模式] 案例 {design_case.case_id} 执行完毕，等待 10 秒后关闭 ETABS ...")
+            time.sleep(10)
+            try:
+                my_etabs, _ = etabs_setup.get_etabs_objects()
+                if my_etabs is not None:
+                    my_etabs.ApplicationExit(False)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[WARN] 关闭 ETABS 失败: {exc}")
+            finally:
+                try:
+                    etabs_setup.set_sap_model(None)
+                    etabs_setup.my_etabs = None  # type: ignore[attr-defined]
+                except Exception:
+                    pass
         file_operations.remove_pycache()
+
+
+def run_pipeline():
+    """Run the full pipeline for all parametric cases."""
+    plan_path, design_cases = prepare_design_cases()
+    if not design_cases:
+        print("[参数化模式] 未获取到任何案例，终止执行。")
+        return
+
+    total_cases = len(design_cases)
+    print(f"[参数化模式] 将依次运行 {total_cases} 个案例 (来源: {plan_path.name})")
+    for idx, design_case in enumerate(design_cases, start=1):
+        run_single_case(design_case, idx, total_cases)
 
 
 if __name__ == "__main__":
