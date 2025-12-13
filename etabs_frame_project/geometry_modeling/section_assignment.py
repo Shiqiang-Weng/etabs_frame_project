@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Section assignment based on parametric design mapping."""
 
@@ -7,6 +7,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Optional, Tuple
 
+from common.config import design_config_from_case
 from common.etabs_setup import get_etabs_objects
 from common.utility_functions import check_ret
 from .api_compat import _get_name_list_safe
@@ -64,38 +65,11 @@ def _beam_position(orientation: str, i: int, j: int, topo: Dict[str, Any]) -> st
     return "EDGE" if i in {0, topo["n_x"]} else "INT"
 
 
-def _column_section_name(design, group_name: str, position: str) -> Optional[str]:
-    gid = _group_id(group_name)
-    params = design.sizing.get(group_name, {})
-    key = f"C_G{gid}_{position.title()}_b" if position != "INTERIOR" else f"C_G{gid}_Interior_b"
-    if position == "EDGE":
-        key = f"C_G{gid}_Edge_b"
-    elif position == "CORNER":
-        key = f"C_G{gid}_Corner_b"
-    value = params.get(key)
-    if value is None:
-        return None
-    return f"C_G{gid}_{position}_{int(value)}"
-
-
-def _beam_section_name(design, group_name: str, position: str) -> Optional[str]:
-    gid = _group_id(group_name)
-    params = design.sizing.get(group_name, {})
-    if position == "EDGE":
-        b = params.get(f"B_G{gid}_Edge_b")
-        h = params.get(f"B_G{gid}_Edge_h")
-        label = "EDGE"
-    else:
-        b = params.get(f"B_G{gid}_Interior_b")
-        h = params.get(f"B_G{gid}_Interior_h")
-        label = "INT"
-    if b is None or h is None:
-        return None
-    return f"B_G{gid}_{label}_{int(b)}x{int(h)}"
-
-
-def assign_sections_by_design(design, topo: Dict[str, Any]) -> None:
+def assign_sections_by_design(design, topo: Optional[Dict[str, Any]] = None) -> None:
     """Assign beam/column sections based on design mapping and topology."""
+    design_cfg = design_config_from_case(design)
+    topo_data = topo or design_cfg.topology
+
     my_etabs, sap_model = get_etabs_objects()
     if sap_model is None:
         return
@@ -117,24 +91,24 @@ def assign_sections_by_design(design, topo: Dict[str, Any]) -> None:
                 skipped += 1
                 continue
             i, j, story = parsed
-            group_name = _get_story_group(design.group_mapping, story)
+            group_name = _get_story_group(design_cfg.group_mapping, story)
             if not group_name:
                 skipped += 1
                 continue
-            position = _column_position(i, j, topo)
-            target_section = _column_section_name(design, group_name, position)
+            position = _column_position(i, j, topo_data)
+            target_section = design_cfg.column_section_name_for_story(story, position)
         elif name.startswith("BEAM_"):
             parsed = _parse_beam(name)
             if not parsed:
                 skipped += 1
                 continue
             orientation, i, j, story = parsed
-            group_name = _get_story_group(design.group_mapping, story)
+            group_name = _get_story_group(design_cfg.group_mapping, story)
             if not group_name:
                 skipped += 1
                 continue
-            position = _beam_position(orientation, i, j, topo)
-            target_section = _beam_section_name(design, group_name, position)
+            position = _beam_position(orientation, i, j, topo_data)
+            target_section = design_cfg.beam_section_name_for_story(story, position)
         else:
             continue
 

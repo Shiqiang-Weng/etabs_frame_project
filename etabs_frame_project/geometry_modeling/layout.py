@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List, Tuple, TYPE_CHECKING
 
 from common import config
-from common.config import SETTINGS
+from common.config import DEFAULT_DESIGN_CONFIG, DesignConfig, design_config_from_case
 
 if TYPE_CHECKING:
     from parametric_model.param_sampling import DesignCaseConfig
@@ -57,17 +57,12 @@ class GridConfig:
 @dataclass(frozen=True)
 class StoryConfig:
     num_stories: int
-    typical_height: float
-    bottom_height: float
-    beam_height: float
+    story_height: float
 
     def iter_story_bounds(self) -> Iterable[Tuple[int, float, float]]:
-        z = 0.0
         for idx in range(self.num_stories):
-            height = self.typical_height if idx > 0 else self.bottom_height
-            z_bottom = z
-            z_top = z + height
-            z = z_top
+            z_bottom = idx * self.story_height
+            z_top = z_bottom + self.story_height
             yield idx + 1, z_bottom, z_top
 
     def story_top_elevations(self) -> Dict[int, float]:
@@ -78,39 +73,30 @@ class StoryConfig:
 
 
 def default_grid_config() -> GridConfig:
-    cfg = SETTINGS.grid
-    return GridConfig(cfg.num_grid_lines_x, cfg.num_grid_lines_y, cfg.spacing_x, cfg.spacing_y)
+    grid = DEFAULT_DESIGN_CONFIG.grid
+    return GridConfig(grid.num_x, grid.num_y, grid.spacing_x, grid.spacing_y)
 
 
 def default_story_config() -> StoryConfig:
-    grid_cfg = SETTINGS.grid
-    sec_cfg = SETTINGS.sections
-    return StoryConfig(
-        grid_cfg.num_stories,
-        grid_cfg.typical_story_height,
-        grid_cfg.bottom_story_height,
-        sec_cfg.frame_beam_height,
-    )
+    storeys = DEFAULT_DESIGN_CONFIG.storeys
+    return StoryConfig(storeys.num_storeys, storeys.storey_height)
 
 
 def grid_config_from_design(design: "DesignCaseConfig") -> GridConfig:
-    topo = design.topology
+    design_cfg: DesignConfig = design_config_from_case(design)
+    grid = design_cfg.grid
     return GridConfig(
-        num_x=topo["n_x"] + 1,
-        num_y=topo["n_y"] + 1,
-        spacing_x=topo["l_x"] / 1000.0,
-        spacing_y=topo["l_y"] / 1000.0,
+        num_x=grid.num_x,
+        num_y=grid.num_y,
+        spacing_x=grid.spacing_x,
+        spacing_y=grid.spacing_y,
     )
 
 
 def story_config_from_design(design: "DesignCaseConfig") -> StoryConfig:
-    topo = design.topology
-    return StoryConfig(
-        num_stories=topo["N_st"],
-        typical_height=config.TYPICAL_STORY_HEIGHT,
-        bottom_height=config.BOTTOM_STORY_HEIGHT,
-        beam_height=config.FRAME_BEAM_HEIGHT,
-    )
+    design_cfg: DesignConfig = design_config_from_case(design)
+    storeys = design_cfg.storeys
+    return StoryConfig(num_stories=storeys.num_storeys, story_height=storeys.storey_height)
 
 
 __all__ = [

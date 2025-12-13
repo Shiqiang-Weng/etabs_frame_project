@@ -14,6 +14,8 @@ import sys
 import traceback
 from typing import List, Optional
 
+from common.config import design_config_from_case
+
 # --- System程序集加载 ---
 import clr
 
@@ -231,11 +233,24 @@ def set_column_rebar_fixed(sap_model, prop_frame, sec_name, rebar_mat, ETABSv1):
         return False
 
 
+def _to_section_set(*sections):
+    names = set()
+    for sec in sections:
+        if not sec:
+            continue
+        if isinstance(sec, (list, tuple, set)):
+            names.update(str(s) for s in sec)
+        else:
+            names.add(str(sec))
+    return names
+
+
 def set_frames_to_concrete_design(sap_model, beam_section, col_section):
     """关键修复：设置所有构件为混凝土设计程序 - 使用遍历所有构件的保险方法"""
     print("      设置构件为混凝土设计程序...")
 
     try:
+        target_sections = _to_section_set(beam_section, col_section)
         frame_obj = sap_model.FrameObj
 
         # 使用GetNameList获取所有构件
@@ -257,7 +272,7 @@ def set_frames_to_concrete_design(sap_model, beam_section, col_section):
             try:
                 # 获取构件的截面名称
                 ret_sec, section_name = frame_obj.GetSection(frame_name, "")
-                if ret_sec == 0 and section_name in [beam_section, col_section]:
+                if ret_sec == 0 and section_name in target_sections:
                     # 设置为混凝土设计
                     ret_design = frame_obj.SetDesignProcedure(frame_name, 2)  # 2 = Concrete
                     if ret_design == 0:
@@ -301,15 +316,28 @@ def verify_design_setup(sap_model, beam_section, col_section):
         frame_obj = sap_model.FrameObj
 
         # 验证截面配筋类型
-        beam_rebar_type = get_rebar_type_fixed(prop_frame, beam_section)
-        col_rebar_type = get_rebar_type_fixed(prop_frame, col_section)
-
-        beam_type_name = {3: "梁", 2: "柱", 1: "其他", 0: "未设置"}.get(beam_rebar_type, "已设置")
-        col_type_name = {3: "梁", 2: "柱", 1: "其他", 0: "未设置"}.get(col_rebar_type, "已设置")
+        beam_sections = list(_to_section_set(beam_section))
+        col_sections = list(_to_section_set(col_section))
+        beam_types = {}
+        for sec in beam_sections:
+            try:
+                beam_types[sec] = get_rebar_type_fixed(prop_frame, sec)
+            except Exception:
+                beam_types[sec] = None
+        col_types = {}
+        for sec in col_sections:
+            try:
+                col_types[sec] = get_rebar_type_fixed(prop_frame, sec)
+            except Exception:
+                col_types[sec] = None
 
         if debug:
-            print(f"        {beam_section} 配筋类型: {beam_type_name}")
-            print(f"        {col_section} 配筋类型: {col_type_name}")
+            for sec, tp in beam_types.items():
+                beam_type_name = {3: "梁", 2: "柱", 1: "其他", 0: "未设置"}.get(tp, "已设置")
+                print(f"        {sec} 配筋类型: {beam_type_name}")
+            for sec, tp in col_types.items():
+                col_type_name = {3: "梁", 2: "柱", 1: "其他", 0: "未设置"}.get(tp, "已设置")
+                print(f"        {sec} 配筋类型: {col_type_name}")
 
         # 验证构件设计程序
         concrete_design_count = 0
@@ -338,7 +366,7 @@ def verify_design_setup(sap_model, beam_section, col_section):
         return True  # 验证失败不影响主流程
 
 
-def prepare_model_for_design():
+def prepare_model_for_design(design_cfg=None):
     """最终版模型设计准备"""
     print("\n--- 准备模型进行设计 (最终精简版) ---")
     _, sap_model = get_etabs_objects()
@@ -382,17 +410,35 @@ def prepare_model_for_design():
         rebar_material = "HRB400"
         create_rebar_material_fixed(sap_model, ETABSv1, rebar_material)
 
+        beam_sections = []
+        col_sections = []
+        if design_cfg is not None:
+            cfg = design_config_from_case(design_cfg)
+            for name, _, _ in cfg.iter_frame_section_definitions():
+                if name.startswith("B_"):
+                    beam_sections.append(name)
+                elif name.startswith("C_"):
+                    col_sections.append(name)
+
+        if not beam_sections or not col_sections:
+            beam_sections = beam_sections or [FRAME_BEAM_SECTION_NAME]
+            col_sections = col_sections or [FRAME_COLUMN_SECTION_NAME]
+
         # 设置截面配筋
         prop_frame = sap_model.PropFrame
-        beam_success = set_beam_rebar_fixed(sap_model, prop_frame, FRAME_BEAM_SECTION_NAME, rebar_material, ETABSv1)
-        col_success = set_column_rebar_fixed(sap_model, prop_frame, FRAME_COLUMN_SECTION_NAME, rebar_material, ETABSv1)
+        beam_success = all(
+            set_beam_rebar_fixed(sap_model, prop_frame, sec_name, rebar_material, ETABSv1) for sec_name in beam_sections
+        )
+        col_success = all(
+            set_column_rebar_fixed(sap_model, prop_frame, sec_name, rebar_material, ETABSv1)
+            for sec_name in col_sections
+        )
 
         # 关键步骤：设置构件为混凝土设计程序
-        design_proc_success = set_frames_to_concrete_design(sap_model, FRAME_BEAM_SECTION_NAME,
-                                                            FRAME_COLUMN_SECTION_NAME)
+        design_proc_success = set_frames_to_concrete_design(sap_model, beam_sections, col_sections)
 
         # 验证设置
-        verify_success = verify_design_setup(sap_model, FRAME_BEAM_SECTION_NAME, FRAME_COLUMN_SECTION_NAME)
+        verify_success = verify_design_setup(sap_model, beam_sections, col_sections)
 
         # 保存并（可选）重新分析
         sap_model.File.Save()
@@ -497,7 +543,7 @@ def export_legacy_design_results(output_dir: str, design_results: Optional[List[
     extract_and_save_column_results(output_dir, design_results)
 
 
-def perform_concrete_design_and_extract_results():
+def perform_concrete_design_and_extract_results(design_cfg=None):
     """整合增强版主执行函数"""
     print("\n" + "=" * 80)
     print("🎯 执行混凝土梁柱配筋设计 (v22.24b - 梁提取功能增强版)")
@@ -518,7 +564,7 @@ def perform_concrete_design_and_extract_results():
 
         # 阶段1: 模型准备
         print("\n📋 阶段1: 模型设计准备")
-        design_prep_success = prepare_model_for_design()
+        design_prep_success = prepare_model_for_design(design_cfg)
 
         # 阶段2: 运行设计
         print("\n🎯 阶段2: 执行混凝土设计")

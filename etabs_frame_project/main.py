@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from common import config
+from common.config import design_config_from_case
 from common.etabs_api_loader import load_dotnet_etabs_api
 from common import etabs_setup, file_operations
 
@@ -67,8 +68,7 @@ def _refresh_settings_paths() -> None:
             design_data_dir=config.DESIGN_DATA_DIR,
             model_path=config.MODEL_PATH,
         ),
-        grid=config.SETTINGS.grid,
-        sections=config.SETTINGS.sections,
+        materials=config.SETTINGS.materials,
         loads=config.SETTINGS.loads,
         response_spectrum=config.SETTINGS.response_spectrum,
         design=config.SETTINGS.design,
@@ -193,18 +193,22 @@ def prepare_design_cases() -> Tuple[Path, List[DesignCaseConfig]]:
     return plan_files[0], design_cases
 
 
-def prepare_design() -> DesignCaseConfig:
-    """保持兼容：仅返回首个方案。"""
+def prepare_design():
+    """保持兼容：仅返回首个方案的 DesignConfig。"""
     _, design_cases = prepare_design_cases()
     design_case = design_cases[0]
-    print(f"[参数化模式] 将运行 case_index=0, case_id={design_case.case_id}")
-    return design_case
+    design_cfg = design_config_from_case(design_case)
+    print(f"[参数化模式] 将运行 case_index=0, case_id={design_cfg.case_id}")
+    return design_cfg
 
 
-def print_project_info(design: Optional[DesignCaseConfig] = None) -> None:
+def print_project_info(design_cfg=None) -> None:
     """打印项目和脚本配置信息"""
-    num_stories = design.topology["N_st"] if design else config.NUM_STORIES
-    total_height = config.BOTTOM_STORY_HEIGHT + (num_stories - 1) * config.TYPICAL_STORY_HEIGHT
+    from common.config import DEFAULT_DESIGN_CONFIG
+
+    cfg = design_cfg or DEFAULT_DESIGN_CONFIG
+    num_stories = cfg.storeys.num_storeys
+    total_height = num_stories * cfg.storeys.storey_height
     print("=" * 80)
     print("ETABS 框架结构自动建模脚本 (规范四阶段流水线)")
     print("=" * 80)
@@ -212,33 +216,31 @@ def print_project_info(design: Optional[DesignCaseConfig] = None) -> None:
     print(f"- 楼层数 {num_stories}, 总高: {total_height:.1f} m")
     print(f"- 执行设计: {'是' if config.PERFORM_CONCRETE_DESIGN else '否'}")
     print(f"- 提取设计内力: {'是' if config.PERFORM_CONCRETE_DESIGN and config.EXPORT_ALL_DESIGN_FILES else '否'}")
-    if design:
-        topo = design.topology
-        print(f"- 参数化方案 case_id={design.case_id}: n_x={topo['n_x']}, n_y={topo['n_y']}, "
-              f"l_x={topo['l_x']}mm, l_y={topo['l_y']}mm")
+    if design_cfg:
+        topo = cfg.topology
+        print(
+            f"- 参数化方案 case_id={cfg.case_id}: n_x={topo['n_x']}, n_y={topo['n_y']}, "
+            f"l_x={topo['l_x_mm']}mm, l_y={topo['l_y_mm']}mm"
+        )
     print("=" * 80)
 
 
-def stage_setup_and_init():
+def stage_setup_and_init(design_cfg):
     """阶段 0：输出目录检查 + API 加载 + 连接 ETABS"""
     print("\n[阶段0] 系统初始化与 ETABS 连接")
     if not file_operations.check_output_directory():
         sys.exit("输出目录检查失败，脚本终止")
     load_dotnet_etabs_api()
-    _, sap_model = etabs_setup.setup_etabs()
+    _, sap_model = etabs_setup.setup_etabs(design_cfg)
     return sap_model
 
 
-def stage_geometry(sap_model, design: Optional[DesignCaseConfig] = None):
+def stage_geometry(sap_model, design_cfg):
     """阶段 1：几何建模（含材料/截面定义）"""
     print("\n[阶段1] 几何建模")
-    geometry_modeling.define_all_materials_and_sections()
-    if design is None:
-        column_names, beam_names, slab_names, _ = geometry_modeling.create_frame_structure()
-    else:
-        column_names, beam_names, slab_names, _ = geometry_modeling.create_frame_structure_from_design(design)
-        geometry_modeling.create_parametric_frame_sections_from_design(design)
-        geometry_modeling.assign_sections_by_design(design, design.topology)
+    geometry_modeling.define_all_materials_and_sections(design_cfg)
+    column_names, beam_names, slab_names, _ = geometry_modeling.create_frame_structure(design_cfg)
+    geometry_modeling.assign_sections_by_design(design_cfg)
     return column_names, beam_names, slab_names
 
 
@@ -270,7 +272,7 @@ def stage_results(sap_model, frame_element_names, output_dir: Path, workflow_sta
     return summary_path
 
 
-def stage_design_and_forces(sap_model, column_names, beam_names, output_dir: Path, workflow_state):
+def stage_design_and_forces(sap_model, column_names, beam_names, output_dir: Path, workflow_state, design_cfg):
     """阶段 5：构件设计 + 设计内力提取（按配置可选）"""
     analysis_output_dir = Path(config.ANALYSIS_DATA_DIR)
     design_output_dir = Path(config.DESIGN_DATA_DIR)
@@ -280,7 +282,7 @@ def stage_design_and_forces(sap_model, column_names, beam_names, output_dir: Pat
 
     print("\n[阶段5] 混凝土构件设计与设计结果提取")
     try:
-        design_ok = analysis.perform_concrete_design_and_extract_results()
+        design_ok = analysis.perform_concrete_design_and_extract_results(design_cfg)
         workflow_state["design_completed"] = bool(design_ok)
         if design_ok:
             print("[完成] 设计和结果提取验证通过")
@@ -391,11 +393,12 @@ def generate_final_report(start_time, workflow_state):
 
 def run_single_case(design_case: DesignCaseConfig, case_index: int, total_cases: int) -> None:
     """Execute the full pipeline for one design case."""
+    design_cfg = design_config_from_case(design_case)
     print("\n" + "=" * 80)
-    print(f"[参数化模式] 开始案例 {case_index}/{total_cases} (case_id={design_case.case_id})")
+    print(f"[参数化模式] 开始案例 {case_index}/{total_cases} (case_id={design_cfg.case_id})")
     print("=" * 80)
     # 统一将所有输出指向 case_{id} 子目录，避免多案例结果互相覆盖
-    case_dir = set_case_output_paths(design_case.case_id)
+    case_dir = set_case_output_paths(design_cfg.case_id)
     print(f"[参数化模式] 当前案例输出目录: {case_dir}")
     script_start_time = time.time()
     workflow_state = {
@@ -405,9 +408,9 @@ def run_single_case(design_case: DesignCaseConfig, case_index: int, total_cases:
     }
 
     try:
-        print_project_info(design_case)
-        sap_model = stage_setup_and_init()
-        column_names, beam_names, slab_names = stage_geometry(sap_model, design_case)
+        print_project_info(design_cfg)
+        sap_model = stage_setup_and_init(design_cfg)
+        column_names, beam_names, slab_names = stage_geometry(sap_model, design_cfg)
         stage_loads(column_names, beam_names, slab_names)
         stage_analysis(sap_model)
         output_dir = Path(config.DATA_EXTRACTION_DIR)
@@ -417,7 +420,7 @@ def run_single_case(design_case: DesignCaseConfig, case_index: int, total_cases:
         analysis_output_dir.mkdir(parents=True, exist_ok=True)
         design_output_dir.mkdir(parents=True, exist_ok=True)
         stage_results(sap_model, column_names + beam_names, analysis_output_dir, workflow_state)
-        stage_design_and_forces(sap_model, column_names, beam_names, design_output_dir, workflow_state)
+        stage_design_and_forces(sap_model, column_names, beam_names, design_output_dir, workflow_state, design_cfg)
     except SystemExit as exc:
         print("\n--- 脚本已结束 ---")
         if exc.code != 0:
@@ -432,7 +435,7 @@ def run_single_case(design_case: DesignCaseConfig, case_index: int, total_cases:
         generate_final_report(script_start_time, workflow_state)
         if not config.ATTACH_TO_INSTANCE:
             # 每个案例结束后等待 10 秒再关闭 ETABS，保证模型文件写入完成
-            print(f"[参数化模式] 案例 {design_case.case_id} 执行完毕，等待 10 秒后关闭 ETABS ...")
+            print(f"[参数化模式] 案例 {design_cfg.case_id} 执行完毕，等待 10 秒后关闭 ETABS ...")
             time.sleep(10)
             try:
                 my_etabs, _ = etabs_setup.get_etabs_objects()

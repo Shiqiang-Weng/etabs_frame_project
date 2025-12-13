@@ -22,8 +22,8 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 TOPOLOGY_BOUNDS = {
     "N_st": (6, 10, 1),
-    "n_x": (3, 5, 1),
-    "n_y": (5, 10, 1),
+    "n_x": (5, 10, 1),
+    "n_y": (3, 5, 1),
     "l_x": (3600, 7200, 600),
     "l_y": (3600, 7200, 600),
 }
@@ -163,7 +163,7 @@ def sample_downwards(max_bound: int, min_global_bound: int, rng: random.Random, 
     if max_bound == min_global_bound:
         return min_global_bound
 
-    if rng.random() < 0.75 and max_bound in pool:
+    if rng.random() < 0.9 and max_bound in pool:
         return max_bound
 
     smaller = [v for v in pool if v < max_bound]
