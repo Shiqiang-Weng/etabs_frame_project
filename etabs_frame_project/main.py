@@ -8,6 +8,7 @@ Canonical ETABS frame pipeline runner with four stages:
 4) 结果提取 / 后处理 (results_extraction)
 """
 
+import json
 import sys
 import time
 import traceback
@@ -16,6 +17,16 @@ from typing import List, Optional, Tuple
 
 from common import config
 from common.config import design_config_from_case
+from common.dataset_paths import (
+    BUCKET_SIZE,
+    DONE_MARKER_FILENAME,
+    INPUT_BUCKET_PREFIX,
+    NUM_BUCKETS,
+    OUTPUT_BUCKET_PREFIX,
+    build_bucket_dir,
+    compute_bucket,
+    iter_bucket_ranges,
+)
 from common.etabs_api_loader import load_dotnet_etabs_api
 from common import etabs_setup, file_operations
 
@@ -23,6 +34,7 @@ import geometry_modeling
 import load_module
 import analysis
 import results_extraction
+from results_extraction.other_output_items import export_other_output_items_tables
 from parametric_model.param_sampling import (
     DesignCaseConfig,
     generate_param_plan,
@@ -30,6 +42,7 @@ from parametric_model.param_sampling import (
     find_param_plan_file,
     load_param_plan,
 )
+from gnn_dataset import extract_gnn_features
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 PLAN_DIR = PROJECT_ROOT / "parametric_model"
@@ -41,6 +54,42 @@ PLAN_AUTO_CASES = 10000
 
 ORIGINAL_SCRIPT_DIRECTORY = Path(config.SCRIPT_DIRECTORY)
 ORIGINAL_MODEL_NAME = config.MODEL_NAME
+
+
+def get_case_bucket(case_id: int, bucket_size: int = BUCKET_SIZE, num_buckets: int = NUM_BUCKETS):
+    """Return (start, end, suffix) bucket info for a case id."""
+    bucket = compute_bucket(case_id, bucket_size=bucket_size, num_buckets=num_buckets)
+    return bucket.start, bucket.end, bucket.suffix
+
+
+def ensure_bucket_directories(root: Path, prefix: str) -> None:
+    """Ensure all bucket folders (0-999, 1000-1999, ...) exist under root."""
+    root.mkdir(parents=True, exist_ok=True)
+    for start, end in iter_bucket_ranges(bucket_size=BUCKET_SIZE, num_buckets=NUM_BUCKETS):
+        bucket_dir = root / f"{prefix}{start}-{end}"
+        bucket_dir.mkdir(parents=True, exist_ok=True)
+
+
+def get_output_bucket_dir(case_id: int) -> Path:
+    """Bucket directory under SCRIPT_DIRECTORY for a case."""
+    bucket = compute_bucket(case_id, bucket_size=BUCKET_SIZE, num_buckets=NUM_BUCKETS)
+    return build_bucket_dir(ORIGINAL_SCRIPT_DIRECTORY, OUTPUT_BUCKET_PREFIX, bucket)
+
+
+def get_input_bucket_dir(case_id: int) -> Path:
+    """Bucket directory under PLAN_AUTO_DIR for graph inputs."""
+    bucket = compute_bucket(case_id, bucket_size=BUCKET_SIZE, num_buckets=NUM_BUCKETS)
+    return build_bucket_dir(PLAN_AUTO_DIR, INPUT_BUCKET_PREFIX, bucket)
+
+
+def get_case_output_dir(case_id: int) -> Path:
+    """Full case directory (bucketed) for outputs."""
+    return get_output_bucket_dir(case_id) / f"case_{case_id}"
+
+
+def get_done_flag_path(case_id: int) -> Path:
+    """Path to the DONE marker file for a case."""
+    return get_case_output_dir(case_id) / DONE_MARKER_FILENAME
 
 
 def _resolve_case_id(sample: dict, fallback_id: int) -> int:
@@ -116,11 +165,13 @@ def set_case_output_paths(case_id: int) -> Path:
     """
     根据案例编号更新路径到 case_{id} 子目录，所有输出（模型/分析/设计）均落在该目录。
     """
-    case_dir = ORIGINAL_SCRIPT_DIRECTORY / f"case_{case_id}"
+    bucket_dir = get_output_bucket_dir(case_id)
+    case_dir = bucket_dir / f"case_{case_id}"
     data_dir = case_dir / "data_extraction"
     analysis_dir = data_dir / "analysis_data"
     design_dir = data_dir / "design_data"
 
+    bucket_dir.mkdir(parents=True, exist_ok=True)
     config.SCRIPT_DIRECTORY = str(case_dir)
     config.DATA_EXTRACTION_DIR = str(data_dir)
     config.ANALYSIS_DATA_DIR = str(analysis_dir)
@@ -152,6 +203,7 @@ def _load_plan_files(plan_files: List[Path]) -> List[dict]:
 def prepare_design_cases() -> Tuple[Path, List[DesignCaseConfig]]:
     """Locate or generate a param plan and normalize all cases."""
     PLAN_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_bucket_directories(PLAN_AUTO_DIR, INPUT_BUCKET_PREFIX)
     manual_plan = find_param_plan_file(PLAN_DIR, PLAN_PREFIX)
     plan_files: List[Path] = []
 
@@ -264,11 +316,39 @@ def stage_analysis(sap_model):
 def stage_results(sap_model, frame_element_names, output_dir: Path, workflow_state):
     """阶段 4：结果提取 / 后处理"""
     print("\n[阶段4] 结果提取与报表")
-    summary_path = results_extraction.extract_modal_and_drift(sap_model, output_dir)
-    print(f"动态分析结果概要已写入 Excel: {summary_path}")
-    results_extraction.export_beam_and_column_element_forces(output_dir)
-    results_extraction.export_frame_member_forces(output_dir)
-    workflow_state["analysis_completed"] = True
+    summary_path = None
+    success = True
+
+    try:
+        summary_path = results_extraction.extract_modal_and_drift(sap_model, output_dir)
+        print(f"动态分析结果概要已写入 Excel: {summary_path}")
+    except Exception as exc:  # noqa: BLE001
+        success = False
+        print(f"[WARN] 动态分析结果提取失败: {exc}")
+        traceback.print_exc()
+
+    try:
+        results_extraction.export_beam_and_column_element_forces(output_dir)
+    except Exception as exc:  # noqa: BLE001
+        success = False
+        print(f"[WARN] 梁柱内力导出失败: {exc}")
+        traceback.print_exc()
+
+    try:
+        results_extraction.export_frame_member_forces(output_dir)
+    except Exception as exc:  # noqa: BLE001
+        success = False
+        print(f"[WARN] 框架构件内力导出失败: {exc}")
+        traceback.print_exc()
+
+    try:
+        export_other_output_items_tables(sap_model, output_dir)
+    except Exception as exc:  # noqa: BLE001
+        success = False
+        print(f"[WARN] Other Output Items 导出失败: {exc}")
+        traceback.print_exc()
+
+    workflow_state["analysis_completed"] = success
     return summary_path
 
 
@@ -391,12 +471,48 @@ def generate_final_report(start_time, workflow_state):
     print("=" * 80)
 
 
+def is_case_completed(case_id: int) -> bool:
+    return get_done_flag_path(case_id).exists()
+
+
+def mark_case_completed(case_id: int, workflow_state: dict, extra_meta: Optional[dict] = None) -> Path:
+    """Write a DONE marker after key exports complete."""
+    marker_path = get_done_flag_path(case_id)
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    bucket = compute_bucket(case_id, bucket_size=BUCKET_SIZE, num_buckets=NUM_BUCKETS)
+    payload = {
+        "case_id": case_id,
+        "bucket": bucket.suffix,
+        "analysis_completed": workflow_state.get("analysis_completed"),
+        "design_completed": workflow_state.get("design_completed"),
+        "force_extraction_completed": workflow_state.get("force_extraction_completed"),
+        "timestamp": time.time(),
+    }
+    if extra_meta:
+        payload.update(extra_meta)
+    marker_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[断点续跑] DONE 标记写入 {marker_path}")
+    return marker_path
+
+
+def summarize_existing_progress(design_cases: List[DesignCaseConfig]) -> set[int]:
+    completed_ids = {case.case_id for case in design_cases if is_case_completed(case.case_id)}
+    next_case = next((case.case_id for case in design_cases if case.case_id not in completed_ids), None)
+    print(f"[断点续跑] 已完成 {len(completed_ids)}/{len(design_cases)} 个案例；下一个待跑: {next_case}")
+    return completed_ids
+
+
 def run_single_case(design_case: DesignCaseConfig, case_index: int, total_cases: int) -> None:
     """Execute the full pipeline for one design case."""
     design_cfg = design_config_from_case(design_case)
     print("\n" + "=" * 80)
     print(f"[参数化模式] 开始案例 {case_index}/{total_cases} (case_id={design_cfg.case_id})")
     print("=" * 80)
+    done_flag = get_done_flag_path(design_cfg.case_id)
+    if done_flag.exists():
+        print(f"[断点续跑] case_id={design_cfg.case_id} 已完成，标记文件: {done_flag}，跳过执行。")
+        return
+
     # 统一将所有输出指向 case_{id} 子目录，避免多案例结果互相覆盖
     case_dir = set_case_output_paths(design_cfg.case_id)
     print(f"[参数化模式] 当前案例输出目录: {case_dir}")
@@ -406,11 +522,25 @@ def run_single_case(design_case: DesignCaseConfig, case_index: int, total_cases:
         "design_completed": False,
         "force_extraction_completed": False,
     }
+    gnn_input_path: Optional[Path] = None
 
     try:
         print_project_info(design_cfg)
         sap_model = stage_setup_and_init(design_cfg)
         column_names, beam_names, slab_names = stage_geometry(sap_model, design_cfg)
+        # ---- GNN 输入特征导出（几何建模完成后立即执行） ----
+        try:
+            gnn_input_path = extract_gnn_features(
+                sap_model=sap_model,
+                design_cfg=design_cfg,
+                frame_element_names=column_names + beam_names,
+                input_root=PLAN_AUTO_DIR,
+                bucket_size=BUCKET_SIZE,
+                num_buckets=NUM_BUCKETS,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[GNN][WARN] 图输入导出失败（将继续后续流程）: {exc}")
+            traceback.print_exc()
         stage_loads(column_names, beam_names, slab_names)
         stage_analysis(sap_model)
         output_dir = Path(config.DATA_EXTRACTION_DIR)
@@ -421,6 +551,19 @@ def run_single_case(design_case: DesignCaseConfig, case_index: int, total_cases:
         design_output_dir.mkdir(parents=True, exist_ok=True)
         stage_results(sap_model, column_names + beam_names, analysis_output_dir, workflow_state)
         stage_design_and_forces(sap_model, column_names, beam_names, design_output_dir, workflow_state, design_cfg)
+        if workflow_state.get("analysis_completed") and (
+            not config.PERFORM_CONCRETE_DESIGN or workflow_state.get("design_completed")
+        ):
+            mark_case_completed(
+                design_cfg.case_id,
+                workflow_state,
+                extra_meta={
+                    "output_dir": str(case_dir),
+                    "gnn_input": str(gnn_input_path) if gnn_input_path else None,
+                },
+            )
+        else:
+            print("[断点续跑] 未写 DONE 标记，因为分析/设计阶段未完成。")
     except SystemExit as exc:
         print("\n--- 脚本已结束 ---")
         if exc.code != 0:
@@ -459,10 +602,24 @@ def run_pipeline():
         print("[参数化模式] 未获取到任何案例，终止执行。")
         return
 
+    ensure_bucket_directories(ORIGINAL_SCRIPT_DIRECTORY, OUTPUT_BUCKET_PREFIX)
+    ensure_bucket_directories(PLAN_AUTO_DIR, INPUT_BUCKET_PREFIX)
+
     total_cases = len(design_cases)
-    print(f"[参数化模式] 将依次运行 {total_cases} 个案例 (来源: {plan_path.name})")
+    completed_cases = summarize_existing_progress(design_cases)
+    pending_cases = total_cases - len(completed_cases)
+    print(f"[参数化模式] 计划运行 {pending_cases}/{total_cases} 个案例 (来源: {plan_path.name})")
+    if pending_cases <= 0:
+        print("[参数化模式] 所有案例均已完成，退出。")
+        return
+
+    executed_index = 0
     for idx, design_case in enumerate(design_cases, start=1):
-        run_single_case(design_case, idx, total_cases)
+        if design_case.case_id in completed_cases:
+            print(f"[参数化模式] 跳过已完成案例 case_id={design_case.case_id}")
+            continue
+        executed_index += 1
+        run_single_case(design_case, executed_index, total_cases)
 
 
 if __name__ == "__main__":

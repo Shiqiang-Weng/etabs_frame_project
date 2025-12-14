@@ -42,6 +42,8 @@ CONCRETE_E_MODULUS = 30000000
 CONCRETE_POISSON = 0.2
 CONCRETE_THERMAL_EXP = 1.0e-5
 CONCRETE_UNIT_WEIGHT = 26.0
+# C30 concrete axial compressive strength design value (fc) per GB 50010, MPa (= N/mm^2)
+CONCRETE_FC_MPA = 14.3
 
 SLAB_THICKNESS = 0.10
 SLAB_SECTION_NAME = "Slab-100"
@@ -102,6 +104,7 @@ class MaterialConfig:
     concrete_unit_weight: float
     slab_thickness: float
     slab_section_name: str
+    concrete_fc: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -161,6 +164,7 @@ SETTINGS = Settings(
         concrete_unit_weight=CONCRETE_UNIT_WEIGHT,
         slab_thickness=SLAB_THICKNESS,
         slab_section_name=SLAB_SECTION_NAME,
+        concrete_fc=CONCRETE_FC_MPA,
     ),
     loads=LoadsConfig(
         default_dead_super_slab=DEFAULT_DEAD_SUPER_SLAB,

@@ -21,19 +21,23 @@ if str(_PROJECT_ROOT) not in sys.path:
 # ---- Design space definitions -------------------------------------------------
 
 TOPOLOGY_BOUNDS = {
+    # 楼层数与网格/跨数范围
     "N_st": (6, 10, 1),
     "n_x": (5, 10, 1),
     "n_y": (3, 5, 1),
+    # 跨度范围 (mm)
     "l_x": (3600, 7200, 600),
     "l_y": (3600, 7200, 600),
 }
 
-BEAM_HEIGHT_RANGE = (400, 800)
-BEAM_WIDTH_RANGE = (150, 400)
+# 梁截面尺寸范围 (mm)
+BEAM_HEIGHT_RANGE = (400, 1000)
+BEAM_WIDTH_RANGE = (200, 550)
 BEAM_STEP = 50
 
+# 柱截面范围 (mm)
 COLUMN_SIZE_RANGE = (400, 800)
-COLUMN_STEP = 50  # 注意：步长改为50
+COLUMN_STEP = 50
 MIN_COL_SIZE = 400
 
 _COLUMN_GRID = list(range(COLUMN_SIZE_RANGE[0], COLUMN_SIZE_RANGE[1] + COLUMN_STEP, COLUMN_STEP))
@@ -163,7 +167,7 @@ def sample_downwards(max_bound: int, min_global_bound: int, rng: random.Random, 
     if max_bound == min_global_bound:
         return min_global_bound
 
-    if rng.random() < 0.9 and max_bound in pool:
+    if rng.random() < 0.5 and max_bound in pool:
         return max_bound
 
     smaller = [v for v in pool if v < max_bound]
