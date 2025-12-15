@@ -22,17 +22,17 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 TOPOLOGY_BOUNDS = {
     # 楼层数与网格/跨数范围
-    "N_st": (5, 8, 1),
+    "N_st": (4, 8, 1),
     "n_x": (5, 10, 1),
     "n_y": (3, 5, 1),
     # 跨度范围 (mm)
-    "l_x": (3600, 7200, 600),
-    "l_y": (3600, 7200, 600),
+    "l_x": (3600, 7500, 300),
+    "l_y": (3600, 7500, 300),
 }
 
 # 梁截面尺寸范围 (mm)
-BEAM_HEIGHT_RANGE = (400, 1000)
-BEAM_WIDTH_RANGE = (200, 550)
+BEAM_HEIGHT_RANGE = (400, 800)
+BEAM_WIDTH_RANGE = (150, 400)
 BEAM_STEP = 50
 
 # 柱截面范围 (mm)
@@ -112,14 +112,20 @@ def sample_topology(rng: random.Random) -> Dict[str, int]:
 
 
 def split_story_groups(num_stories: int) -> Dict[str, Any]:
+    """
+    Group mapping for stories:
+    - Group1: story 1~2 (if available)
+    - Remaining stories (3..N): split evenly into Group2/Group3
+      - If odd, the extra story goes to Group2
+    """
     if num_stories <= 0:
         counts = [0, 0, 0]
     else:
-        bottom = 1
-        remaining = max(num_stories - 1, 0)
-        middle = remaining // 2 + (1 if remaining % 2 else 0)
-        top = remaining - middle
-        counts = [bottom, middle, top]
+        g1 = min(num_stories, 2)
+        remaining = max(num_stories - g1, 0)
+        g2 = remaining // 2 + (1 if remaining % 2 else 0)
+        g3 = remaining - g2
+        counts = [g1, g2, g3]
     groups: Dict[str, Dict[str, List[int]]] = {}
     story_to_group: Dict[int, str] = {}
     start = 1

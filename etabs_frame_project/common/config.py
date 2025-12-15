@@ -37,13 +37,46 @@ REMOTE_COMPUTER = "YourRemoteComputerName"
 
 # ---------------------------- 材料与截面名称 ---------------------------------
 
-CONCRETE_MATERIAL_NAME = "C30/37"
-CONCRETE_E_MODULUS = 30000000
+DEFAULT_CONCRETE_GRADE = "C35"
+
+# NOTE:
+# - E uses MPa in kN-m-C unit system: 3.15×10^4 MPa -> 31,500,000
+# - concrete_fc stores fcd (轴心抗压强度设计值), MPa
+# - concrete_ft stores ftd (轴心抗拉强度设计值), MPa
+CONCRETE_GRADE_PROPS: Dict[str, Dict[str, Any]] = {
+    "C35": {"material_name": "C35", "E": 31500000, "fcd": 16.7, "ftd": 1.57},
+    "C40": {"material_name": "C40", "E": 32500000, "fcd": 19.1, "ftd": 1.71},
+}
+
+# Group1: 第 1~2 层；Group2/3: 其余层
+CONCRETE_GRADE_BY_GROUP: Dict[str, str] = {"Group1": "C40", "Group2": "C35", "Group3": "C35"}
+
+
+def concrete_grade_for_group(group_name: str) -> str:
+    digits = "".join(ch for ch in str(group_name) if ch.isdigit())
+    normalized = f"Group{digits}" if digits else str(group_name)
+    return CONCRETE_GRADE_BY_GROUP.get(normalized, DEFAULT_CONCRETE_GRADE)
+
+
+def concrete_material_name_for_grade(grade: str) -> str:
+    if grade not in CONCRETE_GRADE_PROPS:
+        raise KeyError(f"Unknown concrete grade: {grade}")
+    return str(CONCRETE_GRADE_PROPS[grade]["material_name"])
+
+
+def concrete_material_name_for_group(group_name: str) -> str:
+    return concrete_material_name_for_grade(concrete_grade_for_group(group_name))
+
+
+# Legacy "single concrete" defaults (now aligned to default grade = C35).
+CONCRETE_MATERIAL_NAME = concrete_material_name_for_grade(DEFAULT_CONCRETE_GRADE)
+CONCRETE_E_MODULUS = float(CONCRETE_GRADE_PROPS[DEFAULT_CONCRETE_GRADE]["E"])
 CONCRETE_POISSON = 0.2
 CONCRETE_THERMAL_EXP = 1.0e-5
-CONCRETE_UNIT_WEIGHT = 26.0
-# C30 concrete axial compressive strength design value (fc) per GB 50010, MPa (= N/mm^2)
-CONCRETE_FC_MPA = 14.3
+CONCRETE_UNIT_WEIGHT = 25.0
+# Default axial compressive strength design value (fcd) per GB 50010, MPa (= N/mm^2)
+CONCRETE_FC_MPA = float(CONCRETE_GRADE_PROPS[DEFAULT_CONCRETE_GRADE]["fcd"])
+CONCRETE_FT_MPA = float(CONCRETE_GRADE_PROPS[DEFAULT_CONCRETE_GRADE]["ftd"])
 
 SLAB_THICKNESS = 0.10
 SLAB_SECTION_NAME = "Slab-100"
@@ -97,6 +130,7 @@ class PathsConfig:
 
 @dataclass(frozen=True)
 class MaterialConfig:
+    concrete_grade: str
     concrete_material_name: str
     concrete_e_modulus: float
     concrete_poisson: float
@@ -105,6 +139,7 @@ class MaterialConfig:
     slab_thickness: float
     slab_section_name: str
     concrete_fc: Optional[float] = None
+    concrete_ft: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -157,6 +192,7 @@ SETTINGS = Settings(
         model_path=MODEL_PATH,
     ),
     materials=MaterialConfig(
+        concrete_grade=DEFAULT_CONCRETE_GRADE,
         concrete_material_name=CONCRETE_MATERIAL_NAME,
         concrete_e_modulus=CONCRETE_E_MODULUS,
         concrete_poisson=CONCRETE_POISSON,
@@ -165,6 +201,7 @@ SETTINGS = Settings(
         slab_thickness=SLAB_THICKNESS,
         slab_section_name=SLAB_SECTION_NAME,
         concrete_fc=CONCRETE_FC_MPA,
+        concrete_ft=CONCRETE_FT_MPA,
     ),
     loads=LoadsConfig(
         default_dead_super_slab=DEFAULT_DEAD_SUPER_SLAB,
@@ -260,14 +297,15 @@ class SectionsConfig:
 
 
 def _default_group_mapping(num_storeys: int) -> Dict[str, Any]:
-    """Bottom=1层，剩余楼层按中/顶部均分（向上取整给中部）。"""
+    """Group1=第1~2层；其余楼层(Group2/Group3)均分，奇数余1层给Group2。"""
     if num_storeys <= 0:
         return {"groups": {}, "story_to_group": {}}
-    bottom = 1
-    remaining = max(num_storeys - 1, 0)
-    middle = remaining // 2 + (1 if remaining % 2 else 0)
-    top = remaining - middle
-    counts = [bottom, middle, top]
+
+    g1 = min(num_storeys, 2)
+    remaining = max(num_storeys - g1, 0)
+    g2 = remaining // 2 + (1 if remaining % 2 else 0)
+    g3 = remaining - g2
+    counts = [g1, g2, g3]
     labels = ["bottom", "middle", "top"]
     start = 1
     groups: Dict[str, Dict[str, Any]] = {}
@@ -304,6 +342,23 @@ class DesignConfig:
         if self.slab_section_name:
             return self.slab_section_name
         return f"SLAB_{int(round(self.slab_thickness / MM_TO_M))}"
+
+    def slab_section_name_for_grade(self, grade: str) -> str:
+        """
+        Slab section name convention:
+        - default grade (C35): use base name (self.slab_name)
+        - non-default grade (e.g., C40): append grade suffix
+        """
+        if grade == DEFAULT_CONCRETE_GRADE:
+            return self.slab_name
+        return f"{self.slab_name}_{grade}"
+
+    def slab_section_name_for_group(self, group_name: str) -> str:
+        return self.slab_section_name_for_grade(concrete_grade_for_group(group_name))
+
+    def slab_section_name_for_story(self, story: int) -> str:
+        group_name = self.story_group(story) or "Group1"
+        return self.slab_section_name_for_group(group_name)
 
     @property
     def topology(self) -> Dict[str, int]:
