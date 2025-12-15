@@ -1,17 +1,19 @@
 ﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Canonical ETABS frame pipeline runner with four stages:
+Canonical ETABS frame pipeline runner with five toggleable stages + final report:
 1) 几何建模 (geometry_modeling)
 2) 荷载定义与施加 (load_module)
-3) 分析 / 设计求解 (analysis)
-4) 结果提取 / 后处理 (results_extraction)
+3) 结构分析 (analysis)
+4) 分析结果提取 / 后处理 (results_extraction)
+5) 构件设计 + 设计内力提取（可选）
 """
 
 import json
 import sys
 import time
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -54,6 +56,16 @@ PLAN_AUTO_CASES = 10000
 
 ORIGINAL_SCRIPT_DIRECTORY = Path(config.SCRIPT_DIRECTORY)
 ORIGINAL_MODEL_NAME = config.MODEL_NAME
+
+
+@dataclass
+class PipelineOptions:
+    run_stage1_geometry: bool = True
+    run_stage2_loads: bool = True
+    run_stage3_analysis: bool = True
+    run_stage4_results: bool = True
+    run_stage5_design: bool = False
+    run_final_report: bool = True
 
 
 def get_case_bucket(case_id: int, bucket_size: int = BUCKET_SIZE, num_buckets: int = NUM_BUCKETS):
@@ -120,7 +132,13 @@ def _refresh_settings_paths() -> None:
         materials=config.SETTINGS.materials,
         loads=config.SETTINGS.loads,
         response_spectrum=config.SETTINGS.response_spectrum,
-        design=config.SETTINGS.design,
+        design=config.DesignOptions(
+            perform_concrete_design=config.PERFORM_CONCRETE_DESIGN,
+            export_all_design_files=config.EXPORT_ALL_DESIGN_FILES,
+            reanalyze_before_design=config.REANALYZE_BEFORE_DESIGN,
+            enable_legacy_design_export=config.ENABLE_LEGACY_DESIGN_EXPORT,
+            design_debug_logs=config.DESIGN_DEBUG_LOGS,
+        ),
     )
 
 
@@ -139,6 +157,7 @@ def _patch_module_paths_for_case() -> None:
     import analysis.design_workflow as design_workflow
     design_workflow.DESIGN_DATA_DIR = config.DESIGN_DATA_DIR
     design_workflow.SCRIPT_DIRECTORY = config.SCRIPT_DIRECTORY
+    design_workflow.PERFORM_CONCRETE_DESIGN = config.PERFORM_CONCRETE_DESIGN
 
     import results_extraction.member_forces as member_forces
     member_forces.ANALYSIS_DATA_DIR = config.ANALYSIS_DATA_DIR
@@ -262,7 +281,7 @@ def print_project_info(design_cfg=None) -> None:
     num_stories = cfg.storeys.num_storeys
     total_height = num_stories * cfg.storeys.storey_height
     print("=" * 80)
-    print("ETABS 框架结构自动建模脚本 (规范四阶段流水线)")
+    print("ETABS 框架结构自动建模脚本 (分阶段可开关流水线)")
     print("=" * 80)
     print("关键参数:")
     print(f"- 楼层数 {num_stories}, 总高: {total_height:.1f} m")
@@ -277,44 +296,91 @@ def print_project_info(design_cfg=None) -> None:
     print("=" * 80)
 
 
-def stage_setup_and_init(design_cfg):
+def stage_setup_and_init(design_cfg, options: PipelineOptions):
     """阶段 0：输出目录检查 + API 加载 + 连接 ETABS"""
     print("\n[阶段0] 系统初始化与 ETABS 连接")
-    if not file_operations.check_output_directory():
+    if not file_operations.check_output_directory(
+        create_analysis_dir=options.run_stage4_results, create_design_dir=options.run_stage5_design
+    ):
         sys.exit("输出目录检查失败，脚本终止")
     load_dotnet_etabs_api()
     _, sap_model = etabs_setup.setup_etabs(design_cfg)
     return sap_model
 
 
-def stage_geometry(sap_model, design_cfg):
+def stage_geometry(sap_model, design_cfg, execute: bool, workflow_state: dict):
     """阶段 1：几何建模（含材料/截面定义）"""
+    if not execute:
+        print("\n[阶段1] 跳过几何建模（execute=False）")
+        workflow_state["stage1_geometry"] = None
+        return None, None, None
     print("\n[阶段1] 几何建模")
-    geometry_modeling.define_all_materials_and_sections(design_cfg)
-    column_names, beam_names, slab_names, _ = geometry_modeling.create_frame_structure(design_cfg)
-    geometry_modeling.assign_sections_by_design(design_cfg)
-    return column_names, beam_names, slab_names
+    try:
+        geometry_modeling.define_all_materials_and_sections(design_cfg)
+        column_names, beam_names, slab_names, _ = geometry_modeling.create_frame_structure(design_cfg)
+        geometry_modeling.assign_sections_by_design(design_cfg)
+        workflow_state["stage1_geometry"] = True
+        return column_names, beam_names, slab_names
+    except Exception:
+        workflow_state["stage1_geometry"] = False
+        raise
 
 
-def stage_loads(column_names, beam_names, slab_names):
+def stage_loads(column_names, beam_names, slab_names, execute: bool, workflow_state: dict, analysis_output_needed: bool):
     """阶段 2：荷载定义与施加"""
+    if not execute:
+        print("\n[阶段2] 跳过荷载定义与施加（execute=False）")
+        workflow_state["stage2_loads"] = None
+        return
+    if not column_names or not beam_names or not slab_names:
+        raise RuntimeError(
+            "阶段1被跳过或未生成构件时无法执行阶段2。请先运行几何建模，或实现从既有模型中读取构件列表。"
+        )
     print("\n[阶段2] 荷载定义与施加")
-    load_module.setup_response_spectrum()
-    load_module.define_all_load_cases()
-    load_module.assign_all_loads_to_frame_structure(column_names, beam_names, slab_names)
-    file_operations.finalize_and_save_model()
+    try:
+        load_module.setup_response_spectrum()
+        load_module.define_all_load_cases()
+        load_module.assign_all_loads_to_frame_structure(column_names, beam_names, slab_names)
+        file_operations.finalize_and_save_model(
+            create_analysis_dir=analysis_output_needed,
+            create_design_dir=config.PERFORM_CONCRETE_DESIGN,
+        )
+        workflow_state["stage2_loads"] = True
+    except Exception:
+        workflow_state["stage2_loads"] = False
+        raise
 
 
-def stage_analysis(sap_model):
+def stage_analysis(sap_model, execute: bool, workflow_state: dict):
     """阶段 3：结构分析"""
+    if not execute:
+        print("\n[阶段3] 跳过结构分析（execute=False）")
+        workflow_state["stage3_analysis"] = None
+        return
     print("\n[阶段3] 结构分析")
-    analysis.wait_and_run_analysis(5)
-    if not analysis.check_analysis_completion():
-        print("[提醒] 分析状态检查异常，但继续尝试提取结果")
+    try:
+        analysis.wait_and_run_analysis(5)
+        analysis_ok = analysis.check_analysis_completion()
+        if not analysis_ok:
+            print("[提醒] 分析状态检查异常，但继续尝试提取结果")
+        workflow_state["stage3_analysis"] = analysis_ok
+    except Exception:
+        workflow_state["stage3_analysis"] = False
+        raise
 
 
-def stage_results(sap_model, frame_element_names, output_dir: Path, workflow_state):
-    """阶段 4：结果提取 / 后处理"""
+def stage_results(sap_model, frame_element_names, output_dir: Path, workflow_state: dict, execute: bool):
+    """阶段 4：结果提取 / 后处理（仅分析结果）"""
+    if not execute:
+        print("\n[阶段4] 跳过结果提取与报表（execute=False）")
+        workflow_state["stage4_results"] = None
+        workflow_state["analysis_completed"] = None
+        return None
+    if not frame_element_names:
+        raise RuntimeError(
+            "阶段1被跳过时无法执行阶段4（缺少框架构件列表）。请先运行几何建模，或实现从既有模型中读取构件列表。"
+        )
+
     print("\n[阶段4] 结果提取与报表")
     summary_path = None
     success = True
@@ -348,19 +414,36 @@ def stage_results(sap_model, frame_element_names, output_dir: Path, workflow_sta
         print(f"[WARN] Other Output Items 导出失败: {exc}")
         traceback.print_exc()
 
+    workflow_state["stage4_results"] = success
     workflow_state["analysis_completed"] = success
     return summary_path
 
 
-def stage_design_and_forces(sap_model, column_names, beam_names, output_dir: Path, workflow_state, design_cfg):
+def stage_design_and_forces(
+    sap_model,
+    column_names,
+    beam_names,
+    output_dir: Path,
+    workflow_state: dict,
+    design_cfg,
+    execute: bool,
+):
     """阶段 5：构件设计 + 设计内力提取（按配置可选）"""
     analysis_output_dir = Path(config.ANALYSIS_DATA_DIR)
-    design_output_dir = Path(config.DESIGN_DATA_DIR)
-    if not config.PERFORM_CONCRETE_DESIGN:
-        print("\n[阶段5] 跳过构件设计与设计内力提取（配置关闭）")
+    design_output_dir = Path(output_dir)
+    if not execute:
+        print("\n[阶段5] 跳过构件设计与设计内力提取（execute=False）")
+        workflow_state["stage5_design"] = None
+        workflow_state["design_completed"] = None
+        workflow_state["force_extraction_completed"] = None
         return
+    if not column_names or not beam_names:
+        raise RuntimeError(
+            "阶段1被跳过时无法执行阶段5（缺少梁/柱列表）。请先运行几何建模，或实现从既有模型中读取构件列表。"
+        )
 
     print("\n[阶段5] 混凝土构件设计与设计结果提取")
+    design_output_dir.mkdir(parents=True, exist_ok=True)
     try:
         design_ok = analysis.perform_concrete_design_and_extract_results(design_cfg)
         workflow_state["design_completed"] = bool(design_ok)
@@ -370,11 +453,13 @@ def stage_design_and_forces(sap_model, column_names, beam_names, output_dir: Pat
             print("[警告] 设计和结果提取失败，请检查日志")
     except Exception as exc:  # noqa: BLE001
         workflow_state["design_completed"] = False
+        workflow_state["stage5_design"] = False
         print(f"[错误] 构件设计模块发生严重错误: {exc}")
         traceback.print_exc()
         return
 
     if not workflow_state["design_completed"]:
+        workflow_state["stage5_design"] = False
         print("因设计阶段未成功，跳过设计内力提取")
         return
 
@@ -389,6 +474,9 @@ def stage_design_and_forces(sap_model, column_names, beam_names, output_dir: Pat
         print(f"[警告] 核心结果缺少: {sorted(missing_keys)}")
 
     if not config.EXPORT_ALL_DESIGN_FILES:
+        workflow_state["stage5_design"] = workflow_state["design_completed"] and workflow_state.get(
+            "force_extraction_completed", True
+        )
         print("已生成核心结果文件，跳过全量设计 CSV 导出")
         return
 
@@ -399,6 +487,7 @@ def stage_design_and_forces(sap_model, column_names, beam_names, output_dir: Pat
         else:
             print("构件设计内力提取失败，请检查日志")
     except Exception as exc:  # noqa: BLE001
+        workflow_state["force_extraction_completed"] = False
         print(f"设计内力提取模块发生严重错误: {exc}")
         traceback.print_exc()
     try:
@@ -408,13 +497,19 @@ def stage_design_and_forces(sap_model, column_names, beam_names, output_dir: Pat
         results_extraction.export_frame_member_forces(analysis_output_dir)
     except Exception as exc:  # noqa: BLE001
         print(f"[WARN] 设计后刷新梁/柱内力失败: {exc}")
+    workflow_state["stage5_design"] = bool(
+        workflow_state.get("design_completed")
+        and (workflow_state.get("force_extraction_completed") is not False)
+    )
 
 
-def generate_final_report(start_time, workflow_state):
+def generate_final_report(start_time, workflow_state, execute: bool, options: PipelineOptions):
     """生成并打印最终的执行总结报告"""
+    if not execute:
+        print("\n[最终报告] 跳过报告生成（execute=False）")
+        return
     elapsed_time = time.time() - start_time
     design_dir = Path(config.DESIGN_DATA_DIR)
-    output_dir = Path(config.DATA_EXTRACTION_DIR)
     analysis_dir = Path(config.ANALYSIS_DATA_DIR)
     print("\n" + "=" * 80)
     print("框架结构建模与分析流程完成")
@@ -422,52 +517,48 @@ def generate_final_report(start_time, workflow_state):
     print("=" * 80)
     status_map = {True: "成功", False: "失败", None: "跳过"}
     print("执行状态总结:")
-    print(f"   - 结构建模与分析: {status_map[workflow_state.get('analysis_completed', False)]}")
-    if config.PERFORM_CONCRETE_DESIGN:
-        design_status = status_map[workflow_state.get('design_completed', False)]
-        print(f"   - 构件设计: {design_status}")
-        if workflow_state.get("design_completed"):
-            force_status = status_map[workflow_state.get('force_extraction_completed', False)]
-        else:
-            force_status = "跳过 (设计未成功)"
-        print(f"   - 设计内力提取: {force_status}")
-    else:
-        print(f"   - 构件设计: {status_map[None]}")
-        print(f"   - 设计内力提取: {status_map[None]}")
+    stage_statuses = [
+        ("阶段1 几何建模", workflow_state.get("stage1_geometry")),
+        ("阶段2 荷载施加", workflow_state.get("stage2_loads")),
+        ("阶段3 结构分析", workflow_state.get("stage3_analysis")),
+        ("阶段4 结果提取", workflow_state.get("stage4_results")),
+        ("阶段5 构件设计", workflow_state.get("stage5_design")),
+    ]
+    for label, state in stage_statuses:
+        print(f"   - {label}: {status_map[state]}")
+
     print("\n主要输出文件位于 data_extraction 子目录:")
     print(f"   - 模型文件: {config.MODEL_PATH}")
-    print(f"   - 分析内力: {analysis_dir / 'frame_member_forces.csv'}")
-    if workflow_state.get("design_completed"):
-        print(f"   - 配筋结果: {design_dir / 'concrete_design_results_enhanced.csv'}")
-        print(f"   - 设计报告: {design_dir / 'design_summary_report.txt'}")
-    print(f"   - 梁分析内力表: {analysis_dir / 'beam_element_forces.csv'}")
-    print(f"   - 柱分析内力表: {analysis_dir / 'column_element_forces.csv'}")
+    if options.run_stage4_results:
+        print(f"   - 分析内力汇总: {analysis_dir / 'frame_member_forces.csv'}")
+        print(f"   - 梁分析内力表: {analysis_dir / 'beam_element_forces.csv'}")
+        print(f"   - 柱分析内力表: {analysis_dir / 'column_element_forces.csv'}")
+        print(f"   - 动态分析概要: {analysis_dir / 'analysis_dynamic_summary.xlsx'}")
+    else:
+        print("   - 分析结果导出: 已跳过")
 
-    core_paths = [
-        ("analysis_dynamic_summary.xlsx", analysis_dir / "analysis_dynamic_summary.xlsx"),
-        ("beam_flexure_envelope.csv", design_dir / "beam_flexure_envelope.csv"),
-        ("beam_shear_envelope.csv", design_dir / "beam_shear_envelope.csv"),
-        ("column_pmm_design_forces_raw.csv", design_dir / "column_pmm_design_forces_raw.csv"),
-        ("column_shear_envelope.csv", design_dir / "column_shear_envelope.csv"),
-        ("beam_element_forces.csv", analysis_dir / "beam_element_forces.csv"),
-        ("column_element_forces.csv", analysis_dir / "column_element_forces.csv"),
-    ]
+    if options.run_stage5_design:
+        if workflow_state.get("design_completed"):
+            print(f"   - 配筋结果: {design_dir / 'concrete_design_results_enhanced.csv'}")
+            print(f"   - 设计报告: {design_dir / 'design_summary_report.txt'}")
+            if workflow_state.get("force_extraction_completed") and config.EXPORT_ALL_DESIGN_FILES:
+                print(f"   - 梁弯矩包络: {design_dir / 'beam_flexure_envelope.csv'}")
+                print(f"   - 梁剪力包络: {design_dir / 'beam_shear_envelope.csv'}")
+                print(f"   - 柱P-M-M 原始: {design_dir / 'column_pmm_design_forces_raw.csv'}")
+                print(f"   - 柱剪力包络: {design_dir / 'column_shear_envelope.csv'}")
+        else:
+            print("   - 设计输出: 设计阶段未成功，未生成设计文件")
+    else:
+        print("   - 设计输出: 已跳过（设计阶段关闭）")
 
-    if workflow_state.get("force_extraction_completed"):
-        print("   - 动态分析概要:", core_paths[0][1])
-        print("   - 梁弯矩包络:", core_paths[1][1])
-        print("   - 梁剪力包络:", core_paths[2][1])
-        print("   - 柱P-M-M 原始:", core_paths[3][1])
-        print("   - 柱剪力包络:", core_paths[4][1])
-        print("   - 梁分析内力表:", core_paths[5][1])
-        print("   - 柱分析内力表:", core_paths[6][1])
-        if config.EXPORT_ALL_DESIGN_FILES:
-            print("   - 其他设计输出：已启用全量导出，请查看目录。")
-
-    if config.PERFORM_CONCRETE_DESIGN and workflow_state.get("design_completed"):
-        missing_core = [name for name, path in core_paths if not path.exists()]
+    if options.run_stage5_design and workflow_state.get("design_completed"):
+        core_paths = [
+            design_dir / "concrete_design_results_enhanced.csv",
+            design_dir / "design_summary_report.txt",
+        ]
+        missing_core = [str(path.name) for path in core_paths if not path.exists()]
         if missing_core:
-            print(f"[警告] 核心结果文件未生成: {missing_core}")
+            print(f"[警告] 核心设计结果文件未生成: {missing_core}")
     print("=" * 80)
 
 
@@ -502,8 +593,9 @@ def summarize_existing_progress(design_cases: List[DesignCaseConfig]) -> set[int
     return completed_ids
 
 
-def run_single_case(design_case: DesignCaseConfig, case_index: int, total_cases: int) -> None:
+def run_single_case(design_case: DesignCaseConfig, case_index: int, total_cases: int, options: PipelineOptions) -> None:
     """Execute the full pipeline for one design case."""
+    config.PERFORM_CONCRETE_DESIGN = options.run_stage5_design
     design_cfg = design_config_from_case(design_case)
     print("\n" + "=" * 80)
     print(f"[参数化模式] 开始案例 {case_index}/{total_cases} (case_id={design_cfg.case_id})")
@@ -518,42 +610,80 @@ def run_single_case(design_case: DesignCaseConfig, case_index: int, total_cases:
     print(f"[参数化模式] 当前案例输出目录: {case_dir}")
     script_start_time = time.time()
     workflow_state = {
-        "analysis_completed": False,
-        "design_completed": False,
-        "force_extraction_completed": False,
+        "stage1_geometry": None,
+        "stage2_loads": None,
+        "stage3_analysis": None,
+        "stage4_results": None,
+        "stage5_design": None,
+        "analysis_completed": None,
+        "design_completed": None,
+        "force_extraction_completed": None,
     }
     gnn_input_path: Optional[Path] = None
+    analysis_output_needed = options.run_stage4_results or options.run_stage5_design
 
     try:
         print_project_info(design_cfg)
-        sap_model = stage_setup_and_init(design_cfg)
-        column_names, beam_names, slab_names = stage_geometry(sap_model, design_cfg)
+        sap_model = stage_setup_and_init(design_cfg, options)
+        column_names, beam_names, slab_names = stage_geometry(
+            sap_model, design_cfg, execute=options.run_stage1_geometry, workflow_state=workflow_state
+        )
         # ---- GNN 输入特征导出（几何建模完成后立即执行） ----
-        try:
-            gnn_input_path = extract_gnn_features(
-                sap_model=sap_model,
-                design_cfg=design_cfg,
-                frame_element_names=column_names + beam_names,
-                input_root=PLAN_AUTO_DIR,
-                bucket_size=BUCKET_SIZE,
-                num_buckets=NUM_BUCKETS,
-            )
-        except Exception as exc:  # noqa: BLE001
-            print(f"[GNN][WARN] 图输入导出失败（将继续后续流程）: {exc}")
-            traceback.print_exc()
-        stage_loads(column_names, beam_names, slab_names)
-        stage_analysis(sap_model)
+        if options.run_stage1_geometry and column_names and beam_names:
+            try:
+                gnn_input_path = extract_gnn_features(
+                    sap_model=sap_model,
+                    design_cfg=design_cfg,
+                    frame_element_names=column_names + beam_names,
+                    input_root=PLAN_AUTO_DIR,
+                    bucket_size=BUCKET_SIZE,
+                    num_buckets=NUM_BUCKETS,
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[GNN][WARN] 图输入导出失败（将继续后续流程）: {exc}")
+                traceback.print_exc()
+        elif not options.run_stage1_geometry:
+            print("[GNN] 跳过图输入导出（几何建模未执行）")
+        stage_loads(
+            column_names,
+            beam_names,
+            slab_names,
+            execute=options.run_stage2_loads,
+            workflow_state=workflow_state,
+            analysis_output_needed=analysis_output_needed,
+        )
+        stage_analysis(sap_model, execute=options.run_stage3_analysis, workflow_state=workflow_state)
         output_dir = Path(config.DATA_EXTRACTION_DIR)
         analysis_output_dir = Path(config.ANALYSIS_DATA_DIR)
         design_output_dir = Path(config.DESIGN_DATA_DIR)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        analysis_output_dir.mkdir(parents=True, exist_ok=True)
-        design_output_dir.mkdir(parents=True, exist_ok=True)
-        stage_results(sap_model, column_names + beam_names, analysis_output_dir, workflow_state)
-        stage_design_and_forces(sap_model, column_names, beam_names, design_output_dir, workflow_state, design_cfg)
-        if workflow_state.get("analysis_completed") and (
-            not config.PERFORM_CONCRETE_DESIGN or workflow_state.get("design_completed")
-        ):
+
+        if options.run_stage4_results or options.run_stage5_design:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        if options.run_stage4_results:
+            analysis_output_dir.mkdir(parents=True, exist_ok=True)
+        if options.run_stage5_design:
+            design_output_dir.mkdir(parents=True, exist_ok=True)
+
+        stage_results(
+            sap_model,
+            (column_names or []) + (beam_names or []),
+            analysis_output_dir,
+            workflow_state,
+            execute=options.run_stage4_results,
+        )
+        stage_design_and_forces(
+            sap_model,
+            column_names,
+            beam_names,
+            design_output_dir,
+            workflow_state,
+            design_cfg,
+            execute=options.run_stage5_design,
+        )
+
+        analysis_ok = options.run_stage4_results is False or workflow_state.get("analysis_completed") is True
+        design_ok = options.run_stage5_design is False or workflow_state.get("design_completed") is True
+        if analysis_ok and design_ok:
             mark_case_completed(
                 design_cfg.case_id,
                 workflow_state,
@@ -575,7 +705,7 @@ def run_single_case(design_case: DesignCaseConfig, case_index: int, total_cases:
         file_operations.cleanup_etabs_on_error()
         sys.exit(1)
     finally:
-        generate_final_report(script_start_time, workflow_state)
+        generate_final_report(script_start_time, workflow_state, execute=options.run_final_report, options=options)
         if not config.ATTACH_TO_INSTANCE:
             # 每个案例结束后等待 10 秒再关闭 ETABS，保证模型文件写入完成
             print(f"[参数化模式] 案例 {design_cfg.case_id} 执行完毕，等待 10 秒后关闭 ETABS ...")
@@ -595,8 +725,9 @@ def run_single_case(design_case: DesignCaseConfig, case_index: int, total_cases:
         file_operations.remove_pycache()
 
 
-def run_pipeline():
+def run_pipeline(options: Optional[PipelineOptions] = None):
     """Run the full pipeline for all parametric cases."""
+    options = options or PipelineOptions()
     plan_path, design_cases = prepare_design_cases()
     if not design_cases:
         print("[参数化模式] 未获取到任何案例，终止执行。")
@@ -619,7 +750,7 @@ def run_pipeline():
             print(f"[参数化模式] 跳过已完成案例 case_id={design_case.case_id}")
             continue
         executed_index += 1
-        run_single_case(design_case, executed_index, total_cases)
+        run_single_case(design_case, executed_index, total_cases, options)
 
 
 if __name__ == "__main__":

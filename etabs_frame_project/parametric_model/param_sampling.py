@@ -22,7 +22,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 TOPOLOGY_BOUNDS = {
     # 楼层数与网格/跨数范围
-    "N_st": (6, 10, 1),
+    "N_st": (5, 8, 1),
     "n_x": (5, 10, 1),
     "n_y": (3, 5, 1),
     # 跨度范围 (mm)

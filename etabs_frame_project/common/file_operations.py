@@ -20,7 +20,7 @@ from .config import (
 )
 
 
-def finalize_and_save_model():
+def finalize_and_save_model(create_analysis_dir: bool = True, create_design_dir: bool = True):
     """Refresh view (best effort), ensure output dir, and save the model."""
     my_etabs, sap_model = get_etabs_objects()
     if sap_model is None:
@@ -49,12 +49,14 @@ def finalize_and_save_model():
     try:
         os.makedirs(SCRIPT_DIRECTORY, exist_ok=True)
         os.makedirs(DATA_EXTRACTION_DIR, exist_ok=True)
-        os.makedirs(ANALYSIS_DATA_DIR, exist_ok=True)
-        os.makedirs(DESIGN_DATA_DIR, exist_ok=True)
+        if create_analysis_dir:
+            os.makedirs(ANALYSIS_DATA_DIR, exist_ok=True)
+            print(f"分析数据目录已确保存在: {ANALYSIS_DATA_DIR}")
+        if create_design_dir:
+            os.makedirs(DESIGN_DATA_DIR, exist_ok=True)
+            print(f"设计数据目录已确保存在: {DESIGN_DATA_DIR}")
         print(f"输出目录已确保存在: {SCRIPT_DIRECTORY}")
         print(f"数据导出目录已确保存在: {DATA_EXTRACTION_DIR}")
-        print(f"分析数据目录已确保存在: {ANALYSIS_DATA_DIR}")
-        print(f"设计数据目录已确保存在: {DESIGN_DATA_DIR}")
     except Exception as e:
         sys.exit(f"创建输出目录失败: {e}")
 
@@ -98,17 +100,21 @@ def cleanup_etabs_on_error():
             print(f"关闭 ETABS 失败: {e}")
 
 
-def check_output_directory():
+def check_output_directory(create_analysis_dir: bool = True, create_design_dir: bool = True):
     """Ensure output directory exists (including data_extraction)."""
     try:
         os.makedirs(SCRIPT_DIRECTORY, exist_ok=True)
         os.makedirs(DATA_EXTRACTION_DIR, exist_ok=True)
-        os.makedirs(ANALYSIS_DATA_DIR, exist_ok=True)
-        os.makedirs(DESIGN_DATA_DIR, exist_ok=True)
+        if create_analysis_dir:
+            os.makedirs(ANALYSIS_DATA_DIR, exist_ok=True)
+        if create_design_dir:
+            os.makedirs(DESIGN_DATA_DIR, exist_ok=True)
         print(f"输出目录: {SCRIPT_DIRECTORY}")
         print(f"数据导出目录: {DATA_EXTRACTION_DIR}")
-        print(f"分析数据目录: {ANALYSIS_DATA_DIR}")
-        print(f"设计数据目录: {DESIGN_DATA_DIR}")
+        if create_analysis_dir:
+            print(f"分析数据目录: {ANALYSIS_DATA_DIR}")
+        if create_design_dir:
+            print(f"设计数据目录: {DESIGN_DATA_DIR}")
         return True
     except Exception as e:
         print(f"致命错误: 创建脚本输出目录 '{SCRIPT_DIRECTORY}' 失败: {e}")
