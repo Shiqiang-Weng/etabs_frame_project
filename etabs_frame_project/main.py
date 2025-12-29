@@ -10,6 +10,7 @@ Canonical ETABS frame pipeline runner with five toggleable stages + final report
 """
 
 import json
+import re
 import sys
 import time
 import traceback
@@ -39,11 +40,12 @@ import results_extraction
 from results_extraction.other_output_items import export_other_output_items_tables
 from parametric_model.param_sampling import (
     DesignCaseConfig,
-    generate_param_plan,
+    extend_param_plan_auto_generated,
     generate_param_plan_multi_files,
     find_param_plan_file,
     load_param_plan,
 )
+from rerun_missing_cases import rerun_missing_cases
 from gnn_dataset import extract_gnn_features
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -51,8 +53,12 @@ PLAN_DIR = PROJECT_ROOT / "parametric_model"
 PLAN_PREFIX = "param_plan"
 PLAN_PATH = PLAN_DIR / f"{PLAN_PREFIX}.jsonl"
 PLAN_AUTO_DIR = PLAN_DIR / "param_plan_auto_generated"
+PLAN_AUTO_BASE_NAME = "param_plan_auto_generated"
 PLAN_SEED = 42
-PLAN_AUTO_CASES = 10000
+PLAN_AUTO_TARGET_CASES = 30000
+PLAN_AUTO_PER_FILE = 1000
+PLAN_AUTO_NUM_FILES = (PLAN_AUTO_TARGET_CASES + PLAN_AUTO_PER_FILE - 1) // PLAN_AUTO_PER_FILE
+PLAN_AUTO_MAX_ATTEMPTS = 3000000
 
 ORIGINAL_SCRIPT_DIRECTORY = Path(config.SCRIPT_DIRECTORY)
 ORIGINAL_MODEL_NAME = config.MODEL_NAME
@@ -202,11 +208,21 @@ def set_case_output_paths(case_id: int) -> Path:
     return case_dir
 
 
-def _collect_auto_plan_files(auto_dir: Path) -> List[Path]:
-    """收集自动生成的多文件方案列表。"""
+def _collect_auto_plan_files(auto_dir: Path, base_name: str) -> List[Path]:
+    """收集自动生成的多文件方案列表（按数字后缀排序）。"""
     if not auto_dir.exists():
         return []
-    return sorted(auto_dir.glob("param_plan_auto_generated_*.csv"))
+    pattern = re.compile(rf"^{re.escape(base_name)}_(\d+)$")
+    matches: List[Tuple[int, Path]] = []
+    for path in auto_dir.glob(f"{base_name}_*.csv"):
+        if not path.is_file():
+            continue
+        match = pattern.match(path.stem)
+        if not match:
+            continue
+        matches.append((int(match.group(1)), path))
+    matches.sort(key=lambda item: item[0])
+    return [path for _, path in matches]
 
 
 def _load_plan_files(plan_files: List[Path]) -> List[dict]:
@@ -217,6 +233,14 @@ def _load_plan_files(plan_files: List[Path]) -> List[dict]:
         print(f"[参数化模式] 从 {path} 读取到 {len(part)} 个样本")
         samples.extend(part)
     return samples
+
+
+def _count_samples_in_files(plan_files: List[Path]) -> int:
+    """逐文件统计样本数量（使用 load_param_plan 保持口径一致）。"""
+    total = 0
+    for path in plan_files:
+        total += len(load_param_plan(path))
+    return total
 
 
 def prepare_design_cases() -> Tuple[Path, List[DesignCaseConfig]]:
@@ -230,23 +254,51 @@ def prepare_design_cases() -> Tuple[Path, List[DesignCaseConfig]]:
         print(f"[参数化模式] 检测到方案文件: {manual_plan}")
         plan_files = [manual_plan]
     else:
-        auto_files = _collect_auto_plan_files(PLAN_AUTO_DIR)
+        auto_files = _collect_auto_plan_files(PLAN_AUTO_DIR, PLAN_AUTO_BASE_NAME)
         if auto_files:
-            plan_files = auto_files
             print(f"[参数化模式] 使用已存在的自动方案目录: {PLAN_AUTO_DIR}")
+            existing_count = _count_samples_in_files(auto_files)
+            remaining = PLAN_AUTO_TARGET_CASES - existing_count
+            print(
+                f"[参数化模式] 自动方案 existing_count={existing_count}, "
+                f"target={PLAN_AUTO_TARGET_CASES}, remaining={remaining}"
+            )
+            if existing_count < PLAN_AUTO_TARGET_CASES:
+                print(
+                    f"[参数化模式] 检测到已有 {existing_count}，将扩展到 {PLAN_AUTO_TARGET_CASES}"
+                )
+                extend_param_plan_auto_generated(
+                    out_dir=PLAN_AUTO_DIR,
+                    target_total_cases=PLAN_AUTO_TARGET_CASES,
+                    per_file=PLAN_AUTO_PER_FILE,
+                    seed=PLAN_SEED,
+                    batch_flush_size=1000,
+                    sleep_seconds_between_flush=3,
+                    max_attempts=PLAN_AUTO_MAX_ATTEMPTS,
+                    base_name=PLAN_AUTO_BASE_NAME,
+                )
+                auto_files = _collect_auto_plan_files(PLAN_AUTO_DIR, PLAN_AUTO_BASE_NAME)
+                expanded_count = _count_samples_in_files(auto_files)
+                print(
+                    f"[参数化模式] 扩展完成: files={len(auto_files)}, total_samples={expanded_count}"
+                )
+            else:
+                print("[参数化模式] 无需扩展，已满足 30000")
+            plan_files = auto_files
         else:
+            pattern_path = PLAN_AUTO_DIR / f"{PLAN_AUTO_BASE_NAME}_*.csv"
             print(
                 f"[参数化模式] 未找到方案文件，自动生成: "
-                f"{PLAN_AUTO_DIR / 'param_plan_auto_generated_*.csv'} (cases={PLAN_AUTO_CASES})"
+                f"{pattern_path} (cases={PLAN_AUTO_TARGET_CASES})"
             )
             plan_files = generate_param_plan_multi_files(
-                total_cases=PLAN_AUTO_CASES,
+                total_cases=PLAN_AUTO_TARGET_CASES,
                 out_dir=PLAN_AUTO_DIR,
-                num_files=10,
+                num_files=PLAN_AUTO_NUM_FILES,
                 seed=PLAN_SEED,
                 batch_flush_size=1000,
                 sleep_seconds_between_flush=3,
-                max_attempts=200000,
+                max_attempts=PLAN_AUTO_MAX_ATTEMPTS,
             )
 
     if not plan_files:
@@ -736,21 +788,62 @@ def run_pipeline(options: Optional[PipelineOptions] = None):
     ensure_bucket_directories(ORIGINAL_SCRIPT_DIRECTORY, OUTPUT_BUCKET_PREFIX)
     ensure_bucket_directories(PLAN_AUTO_DIR, INPUT_BUCKET_PREFIX)
 
+    # 断点续跑（目录模式）：只要 case_{id} 输出目录存在，则认为该 case 已经“开始/有产出”，默认从最大已存在 case_id + 1 开始
+    existing_dir_case_ids = [
+        case.case_id for case in design_cases if get_case_output_dir(case.case_id).exists()
+    ]
+    resume_from_case_id = (max(existing_dir_case_ids) + 1) if existing_dir_case_ids else None
+    if resume_from_case_id is not None:
+        print(
+            f"[断点续跑][目录模式] 检测到最大已存在输出目录 case_id={resume_from_case_id - 1}，"
+            f"将从 case_id={resume_from_case_id} 开始运行。"
+        )
+    else:
+        print("[断点续跑][目录模式] 未检测到任何已存在的 case 输出目录，将从第一个 case 开始运行。")
+
     total_cases = len(design_cases)
     completed_cases = summarize_existing_progress(design_cases)
-    pending_cases = total_cases - len(completed_cases)
+
+    candidate_cases = [
+        case for case in design_cases if resume_from_case_id is None or case.case_id >= resume_from_case_id
+    ]
+    pending_cases = sum(1 for case in candidate_cases if case.case_id not in completed_cases)
+
+    def _maybe_rerun_missing_cases() -> None:
+        target_case_id = PLAN_AUTO_TARGET_CASES - 1
+        if not any(case.case_id == target_case_id for case in design_cases):
+            print(f"[缺失重跑] 未找到 case_id={target_case_id}，跳过缺失重跑。")
+            return
+        if is_case_completed(target_case_id) or get_case_output_dir(target_case_id).exists():
+            rerun_missing_cases(
+                design_cases=design_cases,
+                run_case_fn=run_single_case,
+                options=options,
+                project_root=PROJECT_ROOT,
+                output_root=ORIGINAL_SCRIPT_DIRECTORY,
+                get_done_flag_path=get_done_flag_path,
+                get_case_output_dir=get_case_output_dir,
+            )
+        else:
+            print(f"[缺失重跑] case_{target_case_id} 尚未完成，跳过缺失重跑。")
+
     print(f"[参数化模式] 计划运行 {pending_cases}/{total_cases} 个案例 (来源: {plan_path.name})")
     if pending_cases <= 0:
         print("[参数化模式] 所有案例均已完成，退出。")
+        _maybe_rerun_missing_cases()
         return
 
     executed_index = 0
     for idx, design_case in enumerate(design_cases, start=1):
+        if resume_from_case_id is not None and design_case.case_id < resume_from_case_id:
+            continue
         if design_case.case_id in completed_cases:
             print(f"[参数化模式] 跳过已完成案例 case_id={design_case.case_id}")
             continue
         executed_index += 1
         run_single_case(design_case, executed_index, total_cases, options)
+
+    _maybe_rerun_missing_cases()
 
 
 if __name__ == "__main__":

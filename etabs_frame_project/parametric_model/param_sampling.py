@@ -4,9 +4,11 @@
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import random
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -419,7 +421,8 @@ def generate_param_plan(
     max_attempts: Optional[int] = None,
     case_id_offset: int = 0,
     external_seen: Optional[set] = None,
-) -> None:
+    return_stats: bool = False,
+) -> Optional[Dict[str, int]]:
     """
     自动采样生成参数方案：
     - 目标 num_cases 个 unique 样本；
@@ -493,6 +496,10 @@ def generate_param_plan(
     else:
         print(f"{prefix} DONE: {samples_count}/{num_cases} unique samples, attempts={attempts}, file={csv_path}")
 
+    if return_stats:
+        return {"samples_count": samples_count, "attempts": attempts}
+    return None
+
 
 def generate_param_plan_multi_files(
     total_cases: int,
@@ -543,6 +550,317 @@ def generate_param_plan_multi_files(
         paths.append(csv_path)
         produced = len(global_seen) - before
         current_offset += produced
+
+    return paths
+
+
+def _scan_existing_csv_files(out_dir: Path, base_name: str) -> List[Tuple[int, Path]]:
+    if not out_dir.exists():
+        return []
+
+    pattern = re.compile(rf"^{re.escape(base_name)}_(\d+)$")
+    matches: List[Tuple[int, Path]] = []
+    for path in sorted(out_dir.glob(f"{base_name}_*.csv")):
+        if not path.is_file():
+            continue
+        match = pattern.match(path.stem)
+        if not match:
+            continue
+        matches.append((int(match.group(1)), path))
+
+    matches.sort(key=lambda item: item[0])
+    return matches
+
+
+def extend_param_plan_auto_generated(
+    out_dir: Path,
+    target_total_cases: int = 30000,
+    per_file: int = 1000,
+    seed: Optional[int] = 42,
+    batch_flush_size: int = 1000,
+    sleep_seconds_between_flush: int = 3,
+    max_attempts: Optional[int] = None,
+    base_name: str = "param_plan_auto_generated",
+) -> List[Path]:
+    """
+    Extend existing auto-generated plans to the target total number of cases.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    prefix = "[param_sampling]"
+
+    existing_files = _scan_existing_csv_files(out_dir, base_name)
+    if not existing_files:
+        raise RuntimeError(f"{prefix} 未找到已有文件，无法续采样: {out_dir}")
+
+    global_seen: set[Tuple] = set()
+    existing_count = 0
+    case_ids: List[int] = []
+
+    for _, plan_path in existing_files:
+        samples = load_param_plan(plan_path)
+        for sample in samples:
+            existing_count += 1
+            key = flatten_sample_for_key(sample)
+            global_seen.add(key)
+            case_ids.append(int(sample["case_id"]))
+
+    unique_count = len(global_seen)
+    duplicates = existing_count - unique_count
+    if existing_count != unique_count:
+        raise RuntimeError(f"{prefix} 已有数据存在重复，重复数={duplicates}")
+
+    case_id_unique = len(set(case_ids))
+    if case_id_unique != existing_count:
+        raise RuntimeError(
+            f"{prefix} 已有数据存在重复 case_id，重复数={existing_count - case_id_unique}"
+        )
+
+    max_case_id = max(case_ids) if case_ids else -1
+    min_case_id = min(case_ids) if case_ids else 0
+    next_case_id = max_case_id + 1
+
+    remaining = target_total_cases - existing_count
+    start_suffix = existing_files[-1][0] + 1
+
+    print(f"{prefix} extend: out_dir={out_dir}", flush=True)
+    print(
+        f"{prefix} existing files={len(existing_files)}, samples={existing_count}, unique={unique_count}",
+        flush=True,
+    )
+    print(f"{prefix} target_total_cases={target_total_cases}, remaining={remaining}", flush=True)
+    print(
+        f"{prefix} next_case_id={next_case_id}, start_suffix={start_suffix:02d}",
+        flush=True,
+    )
+
+    case_id_span = max_case_id - min_case_id + 1 if case_ids else 0
+    if min_case_id != 0 or case_id_span != existing_count:
+        print(
+            f"{prefix} warning: case_id range not continuous: "
+            f"min={min_case_id}, max={max_case_id}, count={existing_count}",
+            flush=True,
+        )
+
+    if remaining <= 0:
+        print(f"{prefix} 已有样本数满足目标，无需续采样", flush=True)
+        return []
+
+    if per_file <= 0:
+        raise ValueError(f"{prefix} per_file 必须为正整数")
+
+    generated_paths: List[Path] = []
+    generated_total = 0
+    suffix = start_suffix
+
+    while remaining > 0:
+        num_cases = min(per_file, remaining)
+        csv_path = out_dir / f"{base_name}_{suffix:02d}.csv"
+        jsonl_path = csv_path.with_suffix(".jsonl")
+        if csv_path.exists() or jsonl_path.exists():
+            raise RuntimeError(f"{prefix} 目标输出已存在，拒绝覆盖: {csv_path}")
+
+        file_seed = seed + suffix if seed is not None else None
+        before = len(global_seen)
+
+        stats = generate_param_plan(
+            num_cases=num_cases,
+            out_path=csv_path,
+            seed=file_seed,
+            batch_flush_size=batch_flush_size,
+            sleep_seconds_between_flush=sleep_seconds_between_flush,
+            max_attempts=max_attempts,
+            case_id_offset=next_case_id,
+            external_seen=global_seen,
+            return_stats=True,
+        )
+
+        produced = len(global_seen) - before
+        if produced != num_cases:
+            raise RuntimeError(
+                f"{prefix} 续采样失败：期望 {num_cases}，实际 {produced}"
+            )
+
+        generated_total += produced
+        remaining -= produced
+        next_case_id += produced
+        attempts = stats["attempts"] if stats else None
+        attempts_text = str(attempts) if attempts is not None else "n/a"
+        total_now = existing_count + generated_total
+
+        print(
+            f"{prefix} file={csv_path.name}, generated={produced}, total={total_now}, "
+            f"unique={len(global_seen)}, attempts={attempts_text}",
+            flush=True,
+        )
+
+        generated_paths.append(csv_path)
+        suffix += 1
+
+    all_files = _scan_existing_csv_files(out_dir, base_name)
+    total_count = 0
+    seen2: set[Tuple] = set()
+    for _, plan_path in all_files:
+        for sample in load_param_plan(plan_path):
+            total_count += 1
+            key = flatten_sample_for_key(sample)
+            seen2.add(key)
+
+    unique2 = len(seen2)
+    if total_count != target_total_cases or unique2 != target_total_cases:
+        duplicates2 = total_count - unique2
+        raise RuntimeError(
+            f"{prefix} 强校验失败: total={total_count}, unique={unique2}, "
+            f"target={target_total_cases}, duplicates={duplicates2}"
+        )
+
+    print(
+        f"{prefix} OK: total={total_count} unique={unique2}, no duplicates",
+        flush=True,
+    )
+
+    return generated_paths
+
+
+def _collect_existing_plan_files(out_dir: Path, prefix: str) -> List[Path]:
+    """
+    Collect existing plan files, preferring a single file per base name.
+    Priority: jsonl > csv > json > xlsx > xls.
+    """
+    if not out_dir.exists():
+        return []
+
+    suffix_priority = [".jsonl", ".csv", ".json", ".xlsx", ".xls"]
+    by_stem: Dict[str, Path] = {}
+    for suffix in suffix_priority:
+        for path in sorted(out_dir.glob(f"{prefix}*{suffix}")):
+            stem = path.with_suffix("").name
+            if stem not in by_stem:
+                by_stem[stem] = path
+    return [by_stem[name] for name in sorted(by_stem.keys())]
+
+
+def _extract_plan_index(path: Path, prefix: str) -> Optional[int]:
+    stem = path.with_suffix("").name
+    if not stem.startswith(prefix):
+        return None
+    remainder = stem[len(prefix):]
+    if remainder.startswith("_"):
+        remainder = remainder[1:]
+    if remainder.isdigit():
+        return int(remainder)
+    return None
+
+
+def _build_seen_from_existing(plan_paths: List[Path]) -> Tuple[set, set[int]]:
+    seen: set[Tuple] = set()
+    case_ids: set[int] = set()
+    for plan_path in plan_paths:
+        for sample in load_param_plan(plan_path):
+            key = flatten_sample_for_key(sample)
+            if key in seen:
+                raise ValueError(f"[param_sampling] 发现重复样本 key: {plan_path}")
+            case_id = int(sample["case_id"])
+            if case_id in case_ids:
+                raise ValueError(f"[param_sampling] 发现重复 case_id={case_id}: {plan_path}")
+            seen.add(key)
+            case_ids.add(case_id)
+    return seen, case_ids
+
+
+def generate_param_plan_resume(
+    target_total_cases: int,
+    out_dir: Path,
+    prefix: str = "param_plan_auto_generated",
+    seed: Optional[int] = 42,
+    batch_flush_size: int = 1000,
+    sleep_seconds_between_flush: int = 3,
+    max_attempts: Optional[int] = None,
+    new_cases_per_file: int = 1000,
+) -> List[Path]:
+    """
+    Resume/extend sampling based on existing plan files.
+    - Loads existing samples and builds a global de-dup set using flatten_sample_for_key.
+    - Appends new files (no overwrite) until reaching target_total_cases.
+    - Ensures case_id is globally continuous and unique.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    existing_paths = _collect_existing_plan_files(out_dir, prefix)
+    seen, case_ids = _build_seen_from_existing(existing_paths)
+
+    existing_count = len(case_ids)
+    if existing_count == 0:
+        raise ValueError("[param_sampling] 未找到已有样本，无法续采样")
+
+    min_case_id = min(case_ids)
+    max_case_id = max(case_ids)
+    if min_case_id != 0 or max_case_id != existing_count - 1:
+        raise ValueError(
+            "[param_sampling] 现有 case_id 不连续或未从 0 开始，"
+            "无法保证续采样后的全局连续编号"
+        )
+
+    if existing_count >= target_total_cases:
+        print(
+            f"[param_sampling] 已有样本 {existing_count} >= 目标 {target_total_cases}，无需续采样",
+            flush=True,
+        )
+        return []
+
+    remaining = target_total_cases - existing_count
+    if new_cases_per_file <= 0:
+        raise ValueError("[param_sampling] new_cases_per_file 必须为正整数")
+
+    existing_indices = [
+        idx for idx in (_extract_plan_index(path, prefix) for path in existing_paths) if idx is not None
+    ]
+    next_index = max(existing_indices, default=0) + 1
+    total_new_files = (remaining + new_cases_per_file - 1) // new_cases_per_file
+    suffix_width = max(2, len(str(next_index + total_new_files - 1)))
+
+    current_offset = max_case_id + 1
+    global_seen = seen
+    paths: List[Path] = []
+    prefix_tag = "[param_sampling]"
+
+    print(
+        f"{prefix_tag} resume: existing={existing_count}, target={target_total_cases}, "
+        f"remaining={remaining}, start_case_id={current_offset}",
+        flush=True,
+    )
+
+    index = next_index
+    while remaining > 0:
+        per_file = min(new_cases_per_file, remaining)
+        suffix = f"{index:0{suffix_width}d}"
+        csv_path = out_dir / f"{prefix}_{suffix}.csv"
+        jsonl_path = csv_path.with_suffix(".jsonl")
+        if csv_path.exists() or jsonl_path.exists():
+            raise FileExistsError(f"[param_sampling] 目标输出已存在，拒绝覆盖: {csv_path}")
+
+        file_seed = seed + (index - next_index) if seed is not None else None
+        before = len(global_seen)
+
+        generate_param_plan(
+            num_cases=per_file,
+            out_path=csv_path,
+            seed=file_seed,
+            batch_flush_size=batch_flush_size,
+            sleep_seconds_between_flush=sleep_seconds_between_flush,
+            max_attempts=max_attempts,
+            case_id_offset=current_offset,
+            external_seen=global_seen,
+        )
+
+        produced = len(global_seen) - before
+        if produced != per_file:
+            raise RuntimeError(
+                f"[param_sampling] 续采样失败：期望 {per_file}，实际 {produced}"
+            )
+
+        paths.append(csv_path)
+        current_offset += produced
+        remaining -= produced
+        index += 1
 
     return paths
 
@@ -769,6 +1087,8 @@ __all__ = [
     "flatten_sample_for_key",
     "generate_param_plan",
     "generate_param_plan_multi_files",
+    "generate_param_plan_resume",
+    "extend_param_plan_auto_generated",
     "generate_structural_sample",
     "load_param_plan",
     "find_param_plan_file",
@@ -779,16 +1099,61 @@ __all__ = [
 
 
 if __name__ == "__main__":
-    example_cases = 100
-    out_dir = _HERE / "param_plan_auto_generated"
-    print(f"[param_sampling] 生成 {example_cases} 个唯一样本 → {out_dir}")
-    generate_param_plan_multi_files(
-        total_cases=example_cases,
-        out_dir=out_dir,
-        num_files=2,
-        seed=42,
-        batch_flush_size=200,
-        sleep_seconds_between_flush=0,
-        max_attempts=50000,
+    example = """Examples (Windows):
+  python -m etabs_frame_project.parametric_model.param_sampling --extend ^
+    --out-dir "D:\\workspace02\\EtabsProject\\SRC\\etabs_frame_project\\etabs_frame_project\\parametric_model\\param_plan_auto_generated" ^
+    --target-total-cases 30000 ^
+    --per-file 1000 ^
+    --seed 42 ^
+    --max-attempts 3000000
+"""
+    parser = argparse.ArgumentParser(
+        description="Parametric plan sampling helper.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=example,
     )
-    print(f"[param_sampling] 生成完成，目录: {out_dir}")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--generate-fresh", action="store_true", help="Generate plans from scratch.")
+    mode.add_argument("--extend", action="store_true", help="Extend existing plans to target total.")
+
+    parser.add_argument("--out-dir", type=Path, default=_HERE / "param_plan_auto_generated")
+    parser.add_argument(
+        "--base-name",
+        type=str,
+        default="param_plan_auto_generated",
+        help="Base name for --extend (matching base_name_*.csv).",
+    )
+    parser.add_argument("--total-cases", type=int, default=10000)
+    parser.add_argument("--num-files", type=int, default=10)
+    parser.add_argument("--target-total-cases", type=int, default=30000)
+    parser.add_argument("--per-file", type=int, default=1000)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--batch-flush-size", type=int, default=1000)
+    parser.add_argument("--sleep-seconds-between-flush", type=int, default=3)
+    parser.add_argument("--max-attempts", type=int, default=None)
+
+    args = parser.parse_args()
+
+    if args.generate_fresh:
+        print(f"[param_sampling] generate-fresh: total={args.total_cases}, out_dir={args.out_dir}")
+        generate_param_plan_multi_files(
+            total_cases=args.total_cases,
+            out_dir=args.out_dir,
+            num_files=args.num_files,
+            seed=args.seed,
+            batch_flush_size=args.batch_flush_size,
+            sleep_seconds_between_flush=args.sleep_seconds_between_flush,
+            max_attempts=args.max_attempts,
+        )
+        print(f"[param_sampling] DONE: {args.out_dir}")
+    elif args.extend:
+        extend_param_plan_auto_generated(
+            out_dir=args.out_dir,
+            target_total_cases=args.target_total_cases,
+            per_file=args.per_file,
+            seed=args.seed,
+            batch_flush_size=args.batch_flush_size,
+            sleep_seconds_between_flush=args.sleep_seconds_between_flush,
+            max_attempts=args.max_attempts,
+            base_name=args.base_name,
+        )

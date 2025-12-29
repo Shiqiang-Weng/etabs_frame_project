@@ -1,7 +1,11 @@
-.idea/ 
-__pycache__/ 
-*.pyc 
-*.pyo 
-*.log 
-.env 
-*.db 
+# 忽略所有自动生成的数据文件
+*.npz
+*.csv
+*.jsonl
+*.xls
+*.xlsx
+__pycache__/
+.DS_Store
+.idea/
+.vscode/
+etabs_frame_project/parametric_model/param_plan_auto_generated/

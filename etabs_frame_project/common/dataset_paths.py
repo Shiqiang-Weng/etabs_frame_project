@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Iterable, Tuple
 
 BUCKET_SIZE = 1000
-NUM_BUCKETS = 10
+NUM_BUCKETS = 30
 INPUT_BUCKET_PREFIX = "input"
 OUTPUT_BUCKET_PREFIX = "output"
 DONE_MARKER_FILENAME = "_DONE.flag"
@@ -58,4 +58,3 @@ def iter_bucket_ranges(bucket_size: int = BUCKET_SIZE, num_buckets: int = NUM_BU
 def build_bucket_dir(root: Path, prefix: str, bucket: BucketInfo) -> Path:
     """Return the folder path for a bucket under the given root."""
     return Path(root) / f"{prefix}{bucket.suffix}"
-
